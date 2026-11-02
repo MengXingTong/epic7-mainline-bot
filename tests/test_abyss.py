@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from task_blockers import TaskAttention
 from abyss_core import Token,Observation,Scene,Session,Reading,PauseRequired,RunComplete,classify
 from abyss_templates import TemplateBank
 ROOT=Path(__file__).resolve().parents[1]
@@ -105,12 +106,12 @@ class RealFrameTests(unittest.TestCase):
         self.assertIsNone(o.available_floor())
     def test_confirmation_popup_pauses(self):
         o=frame('team-052');o.tokens.append(Token('确认',500,350,80,25))
-        with self.assertRaises(PauseRequired):Session().plan(classify(o),o)
+        with self.assertRaises(TaskAttention):Session().plan(classify(o),o)
     def test_defeat_never_retries(self):
         o=Observation(1200,700,[Token('战斗失败',400,250,160,40)])
         with self.assertRaises(PauseRequired):Session().plan(classify(o),o)
     def test_resource_popup_never_purchases(self):
         o=Observation(1200,700,[Token('购买体力',400,250,160,40)])
-        with self.assertRaises(PauseRequired):Session().plan(classify(o),o)
+        with self.assertRaises(TaskAttention):Session().plan(classify(o),o)
     def test_unknown_has_no_action(self):
         o=Observation(1200,700,[]);self.assertIsNone(Session().plan(classify(o),o))

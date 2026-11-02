@@ -10,7 +10,6 @@ from assistant_status import activity
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','PC 桌面端':'pc'}
 TASKS={'普通深渊':'abyss','主线推进':'mainline'}
-INPUTS={'后台窗口消息 · 实验性':'messages','前台兼容模式':'foreground'}
 
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False):
@@ -65,7 +64,6 @@ class Assistant:
         connection.columnconfigure(1,weight=1)
         self.client=tk.StringVar(value=next(k for k,v in CLIENTS.items() if v==self.settings.get('client','auto')))
         self.task=tk.StringVar(value=next(k for k,v in TASKS.items() if v==self.settings.get('task','abyss')))
-        self.input=tk.StringVar(value=next(k for k,v in INPUTS.items() if v==self.settings.get('pc_input','messages')))
         self.instance=tk.StringVar(value='正在检测客户端…')
         self.client_box=self.combo(connection,'客户端',self.client,list(CLIENTS),0)
         self.refresh_button=self.button(connection,'刷新',self.scan,'#e8f0eb',INK);self.refresh_button.grid(row=0,column=2,padx=(8,0))
@@ -76,11 +74,9 @@ class Assistant:
             self.import_button.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(7,0))
         self.target_box=self.combo(connection,'绑定实例',self.instance,[],1,columnspan=2)
         self.task_box=self.combo(connection,'推进任务',self.task,list(TASKS),2,columnspan=2)
-        self.input_box=self.combo(connection,'桌面输入',self.input,list(INPUTS),3,columnspan=2)
         self.client_box.bind('<<ComboboxSelected>>',lambda e:self.filter_targets())
         self.target_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
         self.task_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
-        self.input_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
         status_card=self.card(outer)
         tk.Label(status_card,text='当前步骤 / 需要处理的原因',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(anchor='w',pady=(0,4))
         tk.Label(status_card,textvariable=self.status,bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'),wraplength=550,justify='left').pack(anchor='w')
@@ -145,7 +141,7 @@ class Assistant:
         except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.update_buttons()
     def current_settings(self):
         value=dict(self.settings)
-        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input=INPUTS[self.input.get()],limit=int(self.limit.get()),observe=self.read_only)
+        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input='messages',start_policy='current_screen',fast_mode=True,limit=int(self.limit.get()),observe=self.read_only)
         return value
     def filter_targets(self):
         client=CLIENTS[self.client.get()]
@@ -161,24 +157,24 @@ class Assistant:
         if client=='mumu':
             text='MuMu 使用 ADB，不占电脑鼠标和焦点；模拟器内需保持游戏打开。'
             if TASKS[self.task.get()]=='abyss':text+=' MuMu深渊尚未实机验收，无法确认界面时停止。'
-        elif INPUTS[self.input.get()]=='messages':text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
-        else:text='PC前台兼容：需保持游戏前台、无遮挡；不会自动抢焦点。'
+        else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
         if not self.settings.get('data_dir'):
             text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
         elif TASKS[self.task.get()]=='mainline':
             try:
                 state=read_json(Path(self.settings.get('data_dir',''))/'state.json',{})
                 text+=' 原主线记录 '+str(len(state.get('completed',{})))+' 关；'
-                if state.get('terminal') or state.get('active'):text+='开始时核对原关通关勾；未核实不重试、不清空历史。'
+                text+='从当前画面继续，不回查旧关；原入场记录留档，不重复入场。'
             except Exception:text+='原进度需要检查，不能清空替代。'
         self.note.set(text)
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
         label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
-        if alive and self.mode!='paused':label={'starting':'检查中…','checking':'检查中…','waiting_focus':'等待游戏前台…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
+        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
+        if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
-        self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode!='paused') else 'normal')
-        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','waiting_focus') else 'disabled')
+        self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) else 'normal')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
     def update_activity(self):
@@ -189,7 +185,7 @@ class Assistant:
         if self.worker_warning:
             if not self.warning_label.winfo_manager():self.warning_label.pack(fill='x',padx=12,pady=(0,5),before=self.activity_progress)
         elif self.warning_label.winfo_manager():self.warning_label.pack_forget()
-        self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode=='blocked' else INK)
+        self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode in ('blocked','attention') else INK)
         self.root.title(view.title.split(' · ')[0]+' | 第七史诗 · 统一推进助手')
         if view!=self.last_badge:
             self.activity_progress.stop()
@@ -199,13 +195,13 @@ class Assistant:
             self.last_badge=view
         if alive:
             age=int(time.monotonic()-self.last_heartbeat)
-            text=('工作进程已确认暂停' if self.mode=='paused' else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
-            if age>15 and self.mode!='paused':text+='  · 仍在等待响应，不代表已卡死'
+            text=('工作进程已暂停，等待手动处理' if self.mode in ('paused','attention') else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
+            if age>15 and self.mode not in ('paused','attention'):text+='  · 仍在等待响应，不代表已卡死'
         else:text='任务没有运行。点击开始才会启动；说明文字不代表任务已开始。'
         self.activity_meta.configure(text=text)
 
     def lock_choices(self,locked):
-        for widget in (self.client_box,self.target_box,self.task_box,self.input_box):widget.configure(state='disabled' if locked else 'readonly')
+        for widget in (self.client_box,self.target_box,self.task_box):widget.configure(state='disabled' if locked else 'readonly')
         self.limit_box.configure(state='disabled' if locked else 'normal');self.refresh_button.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def scan(self):
@@ -224,7 +220,7 @@ class Assistant:
         threading.Thread(target=work,daemon=True).start()
     def start(self):
         if self.process and self.process.poll() is None:
-            if self.mode=='paused':self.command('run');self.mode='starting';self.last_heartbeat=time.monotonic();self.update_buttons()
+            if self.mode in ('paused','attention'):self.command('run');self.mode='starting';self.last_heartbeat=time.monotonic();self.update_buttons()
             else:self.status.set('当前任务仍在运行；先暂停或停止后再切换。')
             return
         try:
@@ -234,7 +230,7 @@ class Assistant:
             from assistant_portable import save_settings
             self.settings=settings;save_settings(settings)
             self.run_id=uuid.uuid4().hex;self.run_dir=HOME/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
-            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'user_selected_profile':not self.read_only}
+            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'user_selected_profile':not self.read_only,'requested_at':time.time()}
             atomic_json(self.run_dir/'request.json',request);self.command('run')
             self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
             atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
@@ -250,7 +246,7 @@ class Assistant:
             threading.Thread(target=reader,daemon=True).start()
         except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.log(str(exc));self.update_buttons()
     def command(self,action):
-        if self.run_dir:atomic_json(self.run_dir/'control.json',{'run_id':self.run_id,'action':action})
+        if self.run_dir:atomic_json(self.run_dir/'control.json',{'run_id':self.run_id,'action':action,'command_id':uuid.uuid4().hex})
     def pause(self):
         if self.process and self.process.poll() is None:self.command('pause');self.mode='pausing';self.status.set('正在安全暂停；不清除本次上下文。');self.update_buttons()
     def stop(self):
@@ -285,7 +281,7 @@ class Assistant:
         except queue.Empty:pass
         if self.started and self.process and self.process.poll() is None:
             seconds=int(time.monotonic()-self.started);self.elapsed.set(f'{seconds//60:02d}:{seconds%60:02d}')
-            if self.mode!='paused' and time.monotonic()-self.last_heartbeat>65:
+            if self.mode not in ('paused','attention') and time.monotonic()-self.last_heartbeat>65:
                 self.command('stop');self.process.terminate();self.status.set('工作进程超过65秒无响应，已停止自己的进程；不重启游戏。');self.mode='blocked';self.update_buttons()
         self.update_activity()
         if self.run_dir:
@@ -341,7 +337,7 @@ def main():
         root.update_idletasks();root.update()
         image=Image.new('RGB',(294,165),'#e8f4ec');app.photo=ImageTk.PhotoImage(image);app.preview.configure(image=app.photo,text='',height=165)
         root.update_idletasks();root.update()
-        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
+        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'foreground_selector_present':hasattr(app,'input_box'),'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
         atomic_json(HOME/'ui-check.json',result);root.after(500,root.destroy)
     root.mainloop()
 

@@ -83,3 +83,17 @@ class GuiActivityTests(unittest.TestCase):
         self.assertLessEqual(self.app.stop_button.winfo_rooty()+self.app.stop_button.winfo_height(),self.app.workarea[3])
         self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':'run','status':'自动战斗中','warning':''}))
         self.app.pump();self.assertFalse(self.app.warning_label.winfo_manager());self.assertEqual(self.app.mode,'run')
+
+    def test_attention_has_continue_button_and_no_watchdog_kill(self):
+        import time
+        child=self.worker('run');self.event('attention','装备已满，手动处理后继续');self.app.started=time.monotonic()-100
+        self.app.last_heartbeat=time.monotonic()-100;self.app.pump()
+        self.assertIn('等待处理',self.app.activity_title.cget('text'))
+        self.assertEqual(self.app.start_button.cget('text'),'处理后继续');self.assertEqual(self.app.start_button.cget('state'),'normal')
+        child.terminate.assert_not_called();self.app.start();self.app.command.assert_called_with('run')
+    def test_stopped_worker_can_start_a_new_run(self):
+        child=self.worker('run');self.event('stopped');child.poll.return_value=0;self.app.events.put(('exit',child.pid));self.app.pump()
+        self.assertEqual(self.app.start_button.cget('text'),'开始推进');self.assertEqual(self.app.start_button.cget('state'),'normal')
+        self.assertEqual(str(self.app.task_box.cget('state')),'readonly')
+    def test_interface_has_no_foreground_selector(self):
+        self.assertFalse(hasattr(self.app,'input_box'));self.assertEqual(self.app.current_settings()['pc_input'],'messages')

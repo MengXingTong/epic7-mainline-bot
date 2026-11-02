@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import re, time, unicodedata
+from task_blockers import capacity_blocker,TaskAttention
+from task_overlays import rankup_splash
 
 
 def normalize(text):
@@ -99,6 +101,8 @@ class Scene(str,Enum):
     RESULT="结算过场"
     DEFEAT="战斗失败"
     HARD="挑战模式（禁止）"
+    RANKUP="Rank升级提示"
+    CAPACITY="容量不足（等待处理）"
     BLOCKED="需要人工处理"
     UNKNOWN="加载或尚未确认界面"
 
@@ -118,6 +122,9 @@ BLOCKED_PHRASES=("体力不足","购买体力","购买入场券","入场券不�
 
 
 def classify(o,normal_verified=False):
+    blocker=capacity_blocker(t.text for t in o.tokens)
+    if blocker:return Reading(Scene.CAPACITY,(blocker.title,blocker.reason))
+    if rankup_splash([dict(text=t.text,x=t.center[0],y=t.center[1]) for t in o.tokens],o.width,o.height) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.RANKUP,('RANK UP','免费Rank提升与已恢复行动力','继续旅程'))
     if o.contains(*BLOCKED_PHRASES) or o.has("确认","确定","取消","购买","复活"):
         return Reading(Scene.BLOCKED,("资源/付费/确认弹窗",))
     if o.has("战斗失败","挑战失败","defeat","失败","重新挑战"):
@@ -178,7 +185,11 @@ class Session:
 
     def plan(self,reading,o):
         scene=reading.scene
-        if scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED):
+        if scene==Scene.RANKUP:
+            return self._action("关闭免费Rank升级提示",Token("继续",o.width*.49,o.height*.96,o.width*.02,o.height*.02),"rankup-continue",scene)
+        if scene in (Scene.CAPACITY,Scene.BLOCKED):
+            raise TaskAttention("capacity" if scene==Scene.CAPACITY else "dialog",reading.evidence[0] if reading.evidence else "等待处理","请手动处理当前提示后点“处理后继续”；不会自动确认、购买或重新入场。")
+        if scene in (Scene.HARD,Scene.DEFEAT):
             self.normal_verified=False
             reason={Scene.HARD:"检测到挑战模式，禁止操作下方高难入口。",Scene.DEFEAT:"战斗失败，已停止，不复活、不重试。",
                     Scene.BLOCKED:"资源、购买或网络提示需要你处理；不会自动确认。"}[scene]

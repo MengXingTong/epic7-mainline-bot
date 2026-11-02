@@ -8,6 +8,10 @@ if (ROOT/'gui'/'tcl').is_dir():
     os.environ['TK_LIBRARY']=str(ROOT/'gui'/'tcl'/'tk8.6')
 if __name__=='__main__':
     try:
+        from windows_elevation import ensure_administrator,RELAUNCH_FLAG
+        result=ensure_administrator(Path(__file__),sys.argv[1:])
+        if result in ('relaunched','cancelled'):sys.exit(0)
+        sys.argv=[arg for arg in sys.argv if arg!=RELAUNCH_FLAG]
         from assistant_app import main
         main()
     except Exception:

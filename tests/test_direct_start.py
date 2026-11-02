@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
 from PIL import Image
-from assistant_worker import prepare_selected_profile,wait_for_selected_foreground
+from assistant_worker import prepare_selected_profile
 
 class DirectStartTests(unittest.TestCase):
     def test_existing_profile_is_read_in_place_without_account_ocr(self):
@@ -28,10 +28,8 @@ class DirectStartTests(unittest.TestCase):
             with patch('assistant_config.HOME',Path(d)),patch('assistant_portable.registered_root',return_value=None),patch('assistant_portable.initialize_selected') as initialize,patch('assistant_transport.UnifiedTransport',return_value=transport),patch('rapidocr_onnxruntime.RapidOCR',return_value=Mock(return_value=([],None))),patch('runner.classify',return_value='unknown'):
                 with self.assertRaises(RuntimeError):prepare_selected_profile(request,Mock())
             initialize.assert_not_called();transport.tap.assert_not_called()
-    def test_foreground_mode_waits_without_activating_or_input(self):
-        target={'client':'pc','exe':'EpicSeven.exe','title':'Epic Seven','hwnd':1,'pid':2,'created':3}
-        api=Mock();api.windows.return_value=[SimpleNamespace(hwnd=1,pid=2,created=3)];api.ready.side_effect=[False,True]
-        ctl=Mock()
-        with patch('pc_backend.Win32Api',return_value=api):wait_for_selected_foreground({'settings':{'pc_input':'foreground'},'target':target},ctl)
-        self.assertEqual(ctl.status.call_args.kwargs['mode'],'waiting_focus')
-        self.assertTrue(all(c[0] in ('windows','ready') for c in api.method_calls))
+    def test_foreground_mode_is_rejected_before_any_native_api(self):
+        from assistant_transport import UnifiedTransport
+        from pc_backend import PcSafetyError
+        with patch('pc_backend.Win32Api',side_effect=AssertionError('Foreground must never initialize')):
+            with self.assertRaises(PcSafetyError):UnifiedTransport({'pc_input':'foreground'},{'client':'pc'})

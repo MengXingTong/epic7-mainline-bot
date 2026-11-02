@@ -4,8 +4,8 @@ No download, publishing, live config copy, or account files. Runtimes stay untra
 from pathlib import Path
 import argparse,hashlib,importlib.metadata,json,shutil,sys,zipfile
 ROOT=Path(__file__).resolve().parent
-SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.2.1-preview'
+SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
+VERSION='1.3-preview'
 
 
 def copy_tree(source,target):
@@ -98,10 +98,13 @@ def build_update(package):
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
 
-已修复STATUS.md报告文件占用导致任务停止；报告失败只提示，关键进度写入失败仍停止。
-保留v1.2的直接启动：不核查账号/服务器，没有“仅观察”/额外确认勾选。
-旧 observe=true 被忽略，原记录与停止保护保留。切账号不再自动识别，请用对应原进度。
-本补丁不更换 PrintWindow/SetCursorPos，不保证解决其他机器的截图/输入兼容问题。
+本次更新：缩短导航等待；补上无确认按钮的Rank升级页；后台切屏短暂黑帧自动重取，不重复点击。
+装备/神器/英雄容量等提示进入“等待处理”，处理后可继续，不判为战败、不自动卖物品或扩容。
+停止后可再次开始；不回看旧关、不要求补记；旧入场与失败证据保留，不重复入场。
+PC只保留后台窗口消息，旧前台设置自动迁移；整场后台/跨机器兼容仍为实验性，不支持最小化。
+启动器自动申请标准管理员权限，首次系统UAC仍需本人点“是”，不绕过权限。
+保留直接启动：不核查账号/服务器，没有“仅观察”/额外确认勾选。
+仅覆盖程序文件，不修改.local和用户进度；旧STOP只在显式新开始时完整归档，新停止仍立即生效。
 """
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
         for name in sorted(names):

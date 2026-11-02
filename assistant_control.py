@@ -1,5 +1,5 @@
 """Control only the current unified worker; never starts/restarts a stopped run."""
-import argparse,sys
+import argparse,sys,uuid
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from assistant_config import HOME,read_json,atomic_json
@@ -12,8 +12,8 @@ def main():
     if folder.parent!=(HOME/'runs').resolve():raise ValueError('Run folder is outside the managed workspace')
     status=read_json(folder/'status.json',{})
     if status.get('run_id')!=active['run_id']:raise ValueError('Worker identity mismatch')
-    if a.action=='resume' and status.get('mode')!='paused':raise ValueError('Only an already-paused worker can resume; no restart performed')
-    atomic_json(folder/'control.json',{'run_id':active['run_id'],'action':'run' if a.action=='resume' else a.action})
+    if a.action=='resume' and status.get('mode') not in ('paused','attention'):raise ValueError('Only an already-paused worker can resume; no restart performed')
+    atomic_json(folder/'control.json',{'run_id':active['run_id'],'action':'run' if a.action=='resume' else a.action,'command_id':uuid.uuid4().hex})
     print('Requested '+a.action+'; game and history are unchanged.')
 
 if __name__=='__main__':main()

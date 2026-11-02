@@ -34,17 +34,17 @@ def load_settings(home=HOME):
             if not root.is_absolute():root=CODE_ROOT/root
             if not (root/'state.json').is_file():raise ValueError('原进度丢失；不初始化替代。')
             result['data_dir']=str(root.resolve())
-        result['observe']=False
+        result.update(observe=False,pc_input='messages',start_policy='current_screen',fast_mode=True)
         result['portable_first_use']=not bool(result.get('data_dir'))
         result['worker_python']=str(CODE_ROOT/'runtime'/'python.exe')
         return result
-    if saved is not None:return {**saved,'observe':False}
+    if saved is not None:return {**saved,'observe':False,'pc_input':'messages','start_policy':'current_screen','fast_mode':True}
     prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{})
     registered=registered_root(home)
     root=prefs.get('data_dir','') or (str(registered) if registered else '')
     # Existing history is referenced in place, never copied/reset by the GUI.
     result={'client':'auto','task':'abyss','pc_input':'messages','limit':3,'observe':False,
-            'data_dir':root,'worker_python':'','mumu':{}}
+            'data_dir':root,'worker_python':'','mumu':{},'start_policy':'current_screen','fast_mode':True}
     hint=CODE_ROOT/'.local/python-path.txt'
     if hint.exists():result['worker_python']=hint.read_text(encoding='utf-8-sig').strip()
     if root:
@@ -80,12 +80,14 @@ def validate_run(settings,target,allow_reconcile=False):
     if settings.get('task') not in ('mainline','abyss'):raise ValueError('Unknown task')
     if not 1<=int(settings.get('limit',0))<=30:raise ValueError('本次上限须为1～30。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
-    if target['client']=='pc' and settings.get('pc_input') not in ('messages','foreground'):raise ValueError('Invalid PC input mode')
+    if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('Invalid PC input mode')
     from assistant_portable import enabled,registered_root
     if not settings.get('data_dir') and registered_root() is None:
         return HOME/'observations',{'attempted':{},'completed':{}}
     root,state=history_gate(settings)
     if settings['task']=='mainline' and not settings.get('observe',False):
+        if settings.get('start_policy')=='current_screen':
+            return root,state
         from mainline_reconcile import pending_reconciliation
         if not (allow_reconcile and pending_reconciliation(state) and not (root/'STOP').exists()):
             gate_mainline(state,(root/'STOP').exists())

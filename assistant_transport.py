@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 from PIL import Image
-from pc_backend import Win32Api, PcSafetyError
+from pc_backend import PcSafetyError
 
 @dataclass
 class FrameSnapshot:
@@ -19,12 +19,11 @@ class UnifiedTransport:
     def __init__(self,settings,target,check=lambda:None):
         self.settings=settings;self.target=target;self.check=check
         self.window=None;self.frame=None;self.frame_window=None;self.last_input=None
-        self.background=target['client']=='mumu' or settings.get('pc_input')=='messages'
+        self.background=True
         if target['client']=='pc':
-            if self.background:
-                from pc_message_backend import MessageWin32Api
-                self.api=MessageWin32Api()
-            else:self.api=Win32Api()
+            if settings.get('pc_input')!='messages':raise PcSafetyError('前台模式已移除；请使用后台窗口消息。')
+            from pc_message_backend import MessageWin32Api
+            self.api=MessageWin32Api()
             rows=self.api.windows(target['exe'],target['title'])
             if len(rows)!=1 or rows[0].hwnd!=target['hwnd'] or rows[0].pid!=target['pid'] or rows[0].created!=target['created']:
                 raise PcSafetyError('Selected PC instance changed')
@@ -42,26 +41,18 @@ class UnifiedTransport:
         if self.api:
             rows=self.api.windows(self.target['exe'],self.target['title'])
             if len(rows)!=1 or rows[0].identity()!=self.window.identity():raise PcSafetyError('PC process/window changed')
-            if not self.api.ready(rows[0]):raise PcSafetyError('PC window unavailable/minimized or foreground compatibility lost focus')
+            if not self.api.ready(rows[0]):raise PcSafetyError('PC background window unavailable or minimized')
             return rows[0]
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf-8',errors='replace')
         lines=[l for l in activity.splitlines() if 'topResumedActivity' in l or 'mResumedActivity' in l]
         if not any(self.target['package']+'/' in l for l in lines):raise RuntimeError('MuMu前台Android应用不是已绑定游戏，停止输入。')
         return self.target['serial']
 
-    def input_tick(self):
-        if self.background:return None
-        import ctypes
-        from ctypes import wintypes
-        class Last(ctypes.Structure):_fields_=[('size',wintypes.UINT),('tick',wintypes.DWORD)]
-        info=Last(ctypes.sizeof(Last),0)
-        if not self.api.u.GetLastInputInfo(ctypes.byref(info)):raise RuntimeError('Cannot verify foreground input state')
-        return info.tick
+    def input_tick(self):return None  # Both supported modes are background-only.
 
     def capture(self):
         before=self.ensure();at=time.monotonic()
         tick=self.input_tick()
-        if self.last_input is not None and tick!=self.last_input:raise RuntimeError('Foreground compatibility detected manual input; safely stopped')
         if self.api:raw=self.api.capture(before)
         else:raw=cv2.imdecode(np.frombuffer(self.adb('exec-out','screencap','-p'),np.uint8),cv2.IMREAD_COLOR)
         if raw is None:raise RuntimeError('Invalid client capture')
@@ -93,7 +84,6 @@ class UnifiedTransport:
             if not self.api.ready(s):raise RuntimeError('PC input target changed')
             try:
                 self.api.button(True)
-                if not self.background:time.sleep(.07)
             finally:self.api.button(False)
             self.last_input=self.input_tick()
         else:self.adb('shell','input','tap',round(x),round(y))

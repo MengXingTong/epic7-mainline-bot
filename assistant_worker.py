@@ -4,6 +4,8 @@ import argparse, hashlib, json, os, subprocess, sys, time, traceback
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
+from task_blockers import TaskAttention
+from task_timing import TransitionPacer,next_delay
 
 class StopRun(Exception):pass
 class PauseRun(Exception):pass
@@ -26,7 +28,9 @@ class Control:
     def log(self,text):
         print(json.dumps({'kind':'log','text':text},ensure_ascii=False),flush=True)
     def preview(self,image):
-        p=self.folder/'preview.tmp.png';image.save(p);os.replace(p,self.folder/'preview.png')
+        from PIL import Image
+        image=image.copy();image.thumbnail((560,315),Image.Resampling.BILINEAR)
+        p=self.folder/'preview.tmp.png';image.save(p,compress_level=1);os.replace(p,self.folder/'preview.png')
     def sleep(self,seconds):
         end=time.monotonic()+seconds
         while time.monotonic()<end:self.check();time.sleep(min(.2,max(0,end-time.monotonic())))
@@ -36,6 +40,17 @@ class Control:
         while True:
             try:self.check();self.status('已恢复，正在刷新当前状态。',mode=resume_mode);return
             except PauseRun:time.sleep(.2)
+
+    def attention(self,exc):
+        # Never write the control file: a concurrent Stop must win over this wait.
+        old=read_json(self.folder/'control.json',{}).get('command_id')
+        self.status(exc.title+'；'+exc.reason,mode='attention',attention_code=exc.code)
+        while True:
+            command=read_json(self.folder/'control.json',{})
+            if command.get('run_id')!=self.run_id or command.get('action')=='stop':raise StopRun()
+            if command.get('action')=='run' and command.get('command_id') and command['command_id']!=old:
+                self.status('已继续，正在重新读取当前画面。',mode='run',attention_code='');return
+            time.sleep(.2)
 
 class GuardedApi:
     def __init__(self,api,control):self.api=api;self.control=control
@@ -49,6 +64,25 @@ class GuardedApi:
         return self.api.button(down)
     def escape(self):self.control.check();return self.api.escape()
 
+
+def capture_fresh(capture,control,clock=time.monotonic):
+    from pc_message_backend import CaptureUnavailable
+    since=None
+    while True:
+        control.check()
+        try:
+            result=capture()
+            if since is not None:control.status('画面已恢复，继续读取当前界面。',mode='run')
+            return result
+        except CaptureUnavailable:
+            now=clock()
+            if since is None:since=now
+            if now-since>=10:
+                control.attention(TaskAttention('capture','暂时取不到游戏画面','请保持游戏窗口未最小化，处理后继续；不会抢焦点或在黑帧上点击。'))
+                since=None
+            else:
+                control.status('切屏期间暂未取得画面，正在重新取图；不点击、不切换前台。',mode='recovering')
+                control.sleep(.4)
 
 def discover(settings):
     from pc_backend import Win32Api
@@ -103,10 +137,10 @@ def abyss_run(request,control):
     key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
     if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
-    previous=None;stable=0;cooldown=0;unknown=None
+    previous=None;stable=0;cooldown=0;cooldown_scene=None;unknown=None
     while True:
         try:
-            control.check();snap=transport.capture();image=snap.image
+            control.check();snap=capture_fresh(transport.capture,control);image=snap.image
             results,_=ocr(np.array(image)[:,:,::-1].copy());tokens=[]
             for box,text,score in results or []:
                 if score<.65:continue
@@ -125,7 +159,7 @@ def abyss_run(request,control):
                 if request.get('once'):return
                 control.sleep(1);continue
             if session.battle_started_at and time.monotonic()-session.battle_started_at>1200:raise PauseRequired('单场超过20分钟，停止等待确认。')
-            if reading.scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED):session.plan(reading,obs)
+            if reading.scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED,Scene.CAPACITY):session.plan(reading,obs)
             if reading.scene==Scene.UNKNOWN:
                 if session.phase in ('battle_opening','battle') and session.battle_started_at:
                     control.status('等待原生自动战斗或过场；不点击技能。');control.sleep(1);continue
@@ -133,14 +167,14 @@ def abyss_run(request,control):
                 if time.monotonic()-unknown>15:raise PauseRequired('界面连续15秒无法确认，不猜测按钮。')
                 control.sleep(1);continue
             unknown=None
-            if stable<2 or time.monotonic()<cooldown:control.sleep(.6);continue
+            if stable<2 or (reading.scene==cooldown_scene and time.monotonic()<cooldown):control.sleep(.4);continue
             if reading.scene==Scene.CLEAR and reading.floor is not None:
                 ledger['completed'].setdefault(str(reading.floor),{'observed_clear_at':time.time()})
                 atomic_json(history_path,history)
             if reading.scene==Scene.NORMAL and reading.available_floor is not None:
                 floor=str(reading.available_floor)
                 if floor in ledger['attempted'] and floor not in ledger['completed']:
-                    raise PauseRequired('该层已有未核实的入场意图；不重复消耗体力。')
+                    raise TaskAttention('new_floor','请选择下一新层','当前层已有入场记录；请选择游戏中下一可进行层后继续，不回查旧层、不重复入场。')
             action=session.plan(reading,obs)
             if action:
                 if request.get('navigation_only') and action.kind=='start_battle':
@@ -152,12 +186,14 @@ def abyss_run(request,control):
                     atomic_json(history_path,history)
                 if action.kind=='swipe':transport.swipe(snap)
                 else:transport.tap(snap,action.token,action.ordinary_gate)
-                session.applied(action);control.log('执行：'+action.name);cooldown=time.monotonic()+2;stable=0
-            control.sleep(.6)
+                session.applied(action);control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
+            control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
         except RunComplete as exc:
             if session.last_won_floor is not None:
                 ledger['completed'].setdefault(str(session.last_won_floor),{'verified_clear_at':time.time()});atomic_json(history_path,history)
             control.status(str(exc),mode='done',wins=session.wins,scene=Scene.CLEAR.value);return
+        except TaskAttention as exc:
+            control.attention(exc);previous=None;stable=0;cooldown=0;unknown=None
         except PauseRun:control.paused();previous=None;stable=0
 
 
@@ -165,7 +201,7 @@ def mainline_run(request,control):
     settings,target=request['settings'],request['target']
     root,state=validate_run(settings,target,allow_reconcile=True)
     cfg=read_json(root/'config.json',{})
-    cfg.update(max_battle_seconds=cfg.get('max_battle_seconds',1800))
+    cfg.update(max_battle_seconds=cfg.get('max_battle_seconds',1800),start_policy=settings.get('start_policy','current_screen'),fast_mode=settings.get('fast_mode',True))
     if target['client']=='mumu':
         cfg.update(settings['mumu']);cfg.update(backend='mumu_adb',serial=target['serial'],package=target['package'])
     else:
@@ -181,47 +217,46 @@ def mainline_run(request,control):
     r=ControlledRunner(observe=True)
     backend=None
     if target['client']=='pc':
-        from pc_backend import PcBackend,Win32Api
+        from pc_backend import PcBackend
         from pc_message_backend import MessageWin32Api
-        api=MessageWin32Api() if settings['pc_input']=='messages' else Win32Api()
+        if settings.get('pc_input')!='messages':raise RuntimeError('前台模式已移除。')
+        api=MessageWin32Api()
         backend=PcBackend(cfg['pc'],root/'STOP',api=GuardedApi(api,control),read_only=settings['observe'])
         identity={'hwnd':target['hwnd'],'pid':target['pid'],'created':target['created'],'exe':os.path.normcase(os.path.abspath(target['exe']))}
         if not settings['observe']:backend.authorize_selected_target(identity)
         r.pc=backend
-    if not settings['observe']:
-        from mainline_reconcile import pending_reconciliation,reconcile_live
-        if pending_reconciliation(r.s):
-            from pc_quickstart import capture_frame
-            if target['client']=='mumu':
-                from assistant_transport import AdbNavigationBackend
-                backend=AdbNavigationBackend(settings,target,control.check);backend.authorize_selected_target(target)
-            capture=lambda:capture_frame(backend,r.ocr,Path(request['run_dir'])/'preflight')
-            control.status('正在核对原失败关的手动通关标记；不读取账号，不重打。',mode='checking')
-            r.s=reconcile_live(root,r.s,None,capture,backend.tap,backend.ensure,private_dir=Path(request['run_dir']),log=control.log,selected_profile=True)
-    if not settings['observe']:
-        from assistant_config import gate_mainline
-        gate_mainline(r.s,(root/'STOP').exists())
     if request.get('preflight_only'):
         frame=r.capture()
         control.status('主线窗口与进度预检通过；未读取账号，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
         return
-    baseline=len(r.s['completed']);deadline=None
+    if not settings['observe']:r.start_current_screen()
+    baseline=len(r.s['completed']);pacer=TransitionPacer()
     while True:
         try:
-            control.check();frame=r.capture()
+            control.check();frame=capture_fresh(r.capture,control)
             from PIL import Image
             control.preview(Image.fromarray(frame.image[:,:,::-1]))
             if settings['observe']:
                 control.status('只读观察；主线原记录保持不变。',mode='observe',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
                 if request.get('once'):return
                 control.sleep(2);continue
+            scene=classify(frame)
+            if pacer.waiting(scene):
+                control.status('等待刚才的操作切换界面；不重复点击。',mode='run',scene=scene)
+                control.sleep(.45);continue
+            before=getattr(r,'input_sequence',0)
             keep,delay=r.step(frame)
+            acted=getattr(r,'input_sequence',0)!=before
+            if acted:pacer.applied(scene,entry=bool(r.s.get('active') and scene=='team'))
+            if settings.get('fast_mode',True):delay=next_delay(scene,delay,acted)
             wins=len(r.s['completed'])-baseline
             control.status(r.s.get('reason','主线运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=len(r.s['completed']),stage=(r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''))
             if not keep:return
             if wins>=int(settings['limit']):control.status('已达到本次主线关数上限，未进入下一关。',mode='done',wins=wins);return
             control.sleep(delay)
-        except PauseRun:control.paused()
+        except TaskAttention as exc:
+            control.attention(exc);r.ticket=None;pacer.reset();r.s.pop('attention',None);r.save()
+        except PauseRun:control.paused();r.ticket=None;pacer.reset()
 
 
 def observe_mainline(request,control):
@@ -234,31 +269,13 @@ def observe_mainline(request,control):
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     while True:
         try:
-            control.check();snap=transport.capture();raw=np.array(snap.image)[:,:,::-1].copy()
+            control.check();snap=capture_fresh(transport.capture,control);raw=np.array(snap.image)[:,:,::-1].copy()
             raw=cv2.resize(raw,(1600,900));results,_=ocr(raw)
             control.preview(snap.image)
             control.status('只读观察，不发送输入、不创建或修改通关记录。',mode='observe',scene=classify(Frame(raw,results)))
             if request.get('once'):return
             control.sleep(2)
         except PauseRun:control.paused()
-
-
-def wait_for_selected_foreground(request,control):
-    """Foreground compatibility needs user focus; never activate a window ourselves."""
-    settings,target=request['settings'],request['target']
-    if target['client']!='pc' or settings.get('pc_input')!='foreground':return
-    from pc_backend import Win32Api
-    api=Win32Api();deadline=time.monotonic()+15
-    while True:
-        control.check()
-        rows=api.windows(target['exe'],target['title'])
-        if len(rows)!=1 or (rows[0].hwnd,rows[0].pid,rows[0].created)!=(target['hwnd'],target['pid'],target['created']):
-            raise RuntimeError('所选游戏窗口已变化；没有切换目标。')
-        if api.ready(rows[0]):return
-        remaining=max(0,int(deadline-time.monotonic()))
-        if not remaining:raise RuntimeError('15秒内未将所选游戏切到前台；任务未开始，不自动抢焦点。')
-        control.status(f'前台兼容模式：将所选游戏切到前台后自动继续（剩余{remaining}秒）；未开始点击。',mode='waiting_focus')
-        control.sleep(.3)
 
 
 def prepare_selected_profile(request,control):
@@ -280,7 +297,7 @@ def prepare_selected_profile(request,control):
         if registered_root() is not None:raise RuntimeError('已存在登记；重新打开软件读取原进度，不新建空记录。')
         transport=UnifiedTransport(settings,request['target'],control.check)
         control.status('正在读取当前游戏画面；不读取账号、不打开设置。',mode='checking')
-        snap=transport.capture();control.preview(snap.image)
+        snap=capture_fresh(transport.capture,control);control.preview(snap.image)
         raw=cv2.resize(np.array(snap.image)[:,:,::-1].copy(),(1600,900))
         ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2);results,_=ocr(raw)
         scene=classify(Frame(raw,results))
@@ -291,6 +308,20 @@ def prepare_selected_profile(request,control):
         print(json.dumps({'kind':'profile','run_id':request['run_id'],'data_dir':str(root)},ensure_ascii=False),flush=True)
         return root
 
+
+def acknowledge_previous_stop(root,request,control):
+    if request['settings'].get('observe'):return
+    marker=Path(root)/'STOP'
+    if not marker.exists():return
+    if not request.get('user_selected_profile'):raise StopRun()
+    stamp=marker.stat().st_mtime
+    if not request.get('requested_at') or stamp>request['requested_at']:raise StopRun()
+    control.check()
+    # The explicit new Start consumes only the previous stop. Any new STOP still vetoes.
+    archive=Path(root)/('STOP.previous-'+request['run_id'])
+    if archive.exists():raise RuntimeError('停止标记归档已存在；没有覆盖原记录。')
+    marker.rename(archive)
+    control.log('新开始已归档上次停止标记；历史和新停止指令保留。')
 
 def run_request(request):
     control=Control(request)
@@ -303,11 +334,11 @@ def run_request(request):
         else:
             while True:
                 try:
-                    wait_for_selected_foreground(request,control)
                     root=prepare_selected_profile(request,control);break
                 except PauseRun:control.paused()
             validate_run(request['settings'],request['target'],allow_reconcile=True)
         with exclusive_profile(root):
+            acknowledge_previous_stop(root,request,control)
             while True:
                 try:
                     if request['settings']['task']=='abyss':abyss_run(request,control)

@@ -8,6 +8,8 @@ def worker_check():
     import cv2,numpy
     from rapidocr_onnxruntime import RapidOCR
     from abyss_templates import TemplateBank
+    import task_blockers,task_overlays,task_timing,windows_elevation
+    from pc_message_backend import CaptureUnavailable
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(ROOT/'assets'/'abyss')
     assert len(bank.entries)==19,'Abyss glyph resources incomplete'
@@ -27,7 +29,7 @@ def main():
         if check.returncode:raise RuntimeError(check.stderr)
         ui=json.loads((Path(folder)/'ui-check.json').read_text(encoding='utf-8'))
         assert ui['controls_visible'] and ui['direct_start']
-        assert not ui['observation_switch_present'] and not ui['account_check_required']
+        assert not ui['observation_switch_present'] and not ui['account_check_required'] and not ui['foreground_selector_present']
         assert ui['footer_bottom']<=ui['workarea'][3]
         result['gui']=ui
     result['result']='PASS - offline runtime/UI/resource checks only; no game input or account history created'

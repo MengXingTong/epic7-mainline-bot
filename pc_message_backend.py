@@ -8,6 +8,9 @@ import numpy as np
 from pc_backend import Win32Api, PcSafetyError
 from pc_message_probe import MessageProbe
 
+class CaptureUnavailable(PcSafetyError):
+    """A transient missing/blank frame; NEVER authorizes input or target changes."""
+
 class MessageWin32Api(Win32Api):
     background = True
     def __init__(self):
@@ -29,9 +32,9 @@ class MessageWin32Api(Win32Api):
     def capture(self,s):
         if not self.ready(s):raise PcSafetyError('Background target changed, minimized or unsupported')
         image,info=MessageProbe(s.hwnd,s.pid).capture()
-        if not info['ok']:raise PcSafetyError('PrintWindow did not provide a frame; no screen-copy fallback')
+        if not info['ok']:raise CaptureUnavailable('PrintWindow did not provide a frame; no screen-copy fallback')
         pixels=np.array(image)[:,:,::-1].copy()
-        if float(pixels.std())<2:raise PcSafetyError('Blank background capture; no input sent')
+        if float(pixels.std())<2:raise CaptureUnavailable('Blank background capture; no input sent')
         if not self.ready(s):raise PcSafetyError('Background geometry changed during capture')
         return pixels
 

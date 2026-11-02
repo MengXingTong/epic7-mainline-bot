@@ -156,7 +156,7 @@ class SelectedTargetStartupRegression(unittest.TestCase):
             self.assertEqual(ctl.status.call_args.kwargs['mode'],'done')
 
 
-    def test_pending_recovery_runs_before_stage_entry_gate(self):
+    def test_pending_history_no_longer_runs_recovery_or_account_check(self):
         from assistant_worker import mainline_run
         from pc_backend import WindowSnapshot
         with tempfile.TemporaryDirectory() as d:
@@ -178,8 +178,8 @@ class SelectedTargetStartupRegression(unittest.TestCase):
             with patch('mainline_reconcile.reconcile_live',return_value=recovered) as recovery,patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='map'),patch('pc_backend.PcBackend',FakeBackend),patch('pc_message_backend.MessageWin32Api',return_value=Mock()),patch('pc_quickstart.inspect_account',side_effect=AssertionError('Account OCR must not run')),patch('pc_quickstart.return_to_game'),patch.dict('os.environ',{},clear=False):
                 mainline_run(dict(settings=settings,target=target,run_dir=d,preflight_only=True),ctl)
             self.assertEqual(ctl.status.call_args.kwargs['mode'],'done')
-            recovery.assert_called_once();self.assertEqual(recovery.call_args.args[1]['active']['key'],KEY)
-            self.assertIsNone(recovery.call_args.args[2]);self.assertTrue(recovery.call_args.kwargs['selected_profile'])
+            recovery.assert_not_called()
+            self.assertEqual(json.loads((p/'state.json').read_text(encoding='utf-8')),s)
 
 class AdbAccountAdapterTests(unittest.TestCase):
     def make(self):

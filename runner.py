@@ -8,6 +8,9 @@ CODE_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from runtime_paths import data_root, config_path
+from task_blockers import capacity_blocker,TaskAttention
+from task_overlays import rankup_splash
+import copy
 ROOT = data_root()
 for _stream in (sys.stdout,sys.stderr):
     if hasattr(_stream,'reconfigure'): _stream.reconfigure(encoding='utf-8',errors='replace')
@@ -117,9 +120,11 @@ def victory_objectives_verified(f):
 
 def classify(f):
     # Vetoes are ordered before EVERY action, including every kind of confirmation.
+    if capacity_blocker(w['text'] for w in f.words):return 'capacity_stop'
     if resource_warning(f): return 'resource_stop'
     if (f.any('网络连接异常') and f.any('重新连接') or f.any('与服务器的连接已中断')) and f.find('点击重试',(500,550,1100,780)): return 'network_error'
     if paid_revive_defeat_verified(f): return 'defeat'
+    if rankup_splash(f.words):return 'rankup_splash'
     conf=f.find(r'^(确认|确定|確定|確認)$')
     cancel=f.find(r'^(取消|취소)$')
     middle=''.join(w['text'] for w in f.words if 260<w['x']<1360 and 140<w['y']<750)
@@ -221,15 +226,19 @@ class Runner:
     def action(self,kind,word=None,xy=None):
         self.ensure_game()
         if time.time()-self.frame.at>5: raise RuntimeError('Stale observation; action cancelled')
+        blocker=capacity_blocker(w['text'] for w in self.frame.words)
+        if blocker:raise TaskAttention(blocker.code,blocker.title,blocker.reason)
         if resource_warning(self.frame): raise RuntimeError('Resource veto immediately before input')
         x,y=xy if xy else (word['x'],word['y'])
         w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
+        self.input_sequence=getattr(self,'input_sequence',0)+1
         event('action',action=kind,xy=coords,stage=(self.s.get('active') or self.ticket or {}).get('key'))
         self.s['last_action']=kind; self.save()
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
     def back(self,why):
         self.ensure_game()
+        self.input_sequence=getattr(self,'input_sequence',0)+1
         event('back',reason=why); self.s['last_action']='返回主线重新验证'; self.save()
         if getattr(self,'pc',None):self.pc.back()
         else:self.adb('shell','input','keyevent','4')
@@ -237,6 +246,22 @@ class Runner:
         self.s.update(status=status,reason=reason,terminal=True,stop_at=now(),stop_evidence=self.evidence('STOP'))
         self.save(); event('stop',status=status,reason=reason); print(json.dumps({'status':status,'reason':reason},ensure_ascii=False),flush=True)
         return False,0
+    def start_current_screen(self):
+        # Complete snapshot retained before releasing display-only terminal state.
+        if self.s.get('terminal') or self.s.get('active') or self.s.get('attention'):
+            self.s.setdefault('resume_audit',[]).append(dict(at=now(),policy='current_screen',previous=copy.deepcopy(self.s if 'resume_audit' not in self.s else {k:v for k,v in self.s.items() if k!='resume_audit'})))
+        self.archive_unresolved_active('新任务从当前画面继续，旧入场不再用于推断本次结算')
+        self.s.update(terminal=False,status='从当前画面继续',reason='不回查旧关，不自动重试；原始记录完整留档')
+        self.s.pop('attention',None);self.save()
+    def archive_unresolved_active(self,why):
+        active=self.s.get('active')
+        if active:
+            self.s.setdefault('unresolved_entries',[]).append(dict(at=now(),reason=why,entry=copy.deepcopy(active)))
+            self.s['active']=None;self.save()
+    def attention(self,code,title,reason):
+        self.ticket=None
+        self.s.update(status=title,reason=reason,terminal=False,attention=dict(code=code,at=now(),evidence=self.evidence('ATTENTION')))
+        self.save();raise TaskAttention(code,title,reason)
     def completed(self,proof):
         a=self.s.get('active')
         if not a: return
@@ -274,10 +299,13 @@ class Runner:
             retries.append(time.time());self.s['network_retries']=retries;self.ticket=None
             self.s.update(status='正在恢复网络连接',reason='只点击已明确识别的网络重试，不是关卡重试；入场和通关记录保留')
             self.action('网络重试（非关卡重试）',f.find('点击重试',(500,550,1100,780))); return True,10
+        if mode=='capacity_stop':
+            b=capacity_blocker(w['text'] for w in f.words)
+            return self.attention(b.code,b.title,b.reason)
         if mode=='resource_stop':
-            return self.stop('体力不足停止','检测到体力补充/兑换/购买提示；没有确认，没有使用任何兑换资源')
+            return self.attention('resource','体力/入场资源不足','请手动处理后点“处理后继续”；没有确认、兑换或使用资源。')
         if mode=='defeat': return self.stop('强度不足卡关','识别到战斗失败/付费续战界面；不花费资源续战、不重新挑战，保留现场')
-        if mode=='unknown_dialog': return self.stop('安全暂停待修复','出现未列入白名单的确认框；未点击任何确认或购买')
+        if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
         if mode=='friend_decline':
             self.action('取消好友申请提示，不发送任何好友申请',f.find(r'^取消$',(500,570,800,720))); return True,3
         if mode=='skip_confirm':
@@ -285,7 +313,7 @@ class Runner:
         if mode=='story':
             self.action('跳过剧情',f.find('跳过',(1400,0,1599,100))); return True,2
         if mode=='settlement':
-            if not self.s.get('active') and not self.s.get('last_cleared'):
+            if not self.s.get('active') and not self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen':
                 return self.stop('安全暂停待修复','结算画面没有可对应的本次入场记录，停止而非猜测进度')
             self.completed('独立识别：获得的道具 + 战斗结果 + 结算确认')
             self.ticket=None
@@ -295,20 +323,24 @@ class Runner:
         if mode=='bond_notice':
             self.action('关闭已解锁缘分的免费通知',f.find(r'^OK$',(600,550,1000,720))); return True,3
         if mode=='post_clear_exit':
-            if self.s.get('active') or not self.s.get('last_cleared'): return self.stop('安全暂停待修复','关后离开界面缺少已结算记录；不点重新进行')
+            if self.s.get('active') or (not self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen'): return self.stop('安全暂停待修复','关后离开界面缺少已结算记录；不点重新进行')
             self.action('已结算后离开关卡，绝不重新进行',f.find(r'^离开$',(50,750,230,899))); return True,4
         if mode=='story_reward':
             self.action('关闭已发放的免费奖励遮罩',f.find('点击关闭',(500,500,1100,720))); return True,3
         if mode=='victory':
-            if not self.s.get('active') and not self.s.get('last_cleared'): return self.stop('安全暂停待修复','胜利页缺少本次入场记录')
+            if not self.s.get('active') and not self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen': return self.stop('安全暂停待修复','胜利页缺少本次入场记录')
             if self.s.get('active') and not self.s['active'].get('victory_seen'):
                 self.s['active']['victory_seen']=True; self.s['active']['victory_evidence']=self.evidence('victory-'+self.s['active']['key'])
             self.action('通关星级页继续至结算',xy=(1550,845)); return True,3
+        if mode=='rankup_splash':
+            self.action('关闭免费Rank升级全屏提示',xy=(800,872));return True,3
         if mode=='rankup':
             self.action('关闭等级提升提示',f.find(r'^(确认|确定|確定|確認)$')); return True,3
         if mode=='lobby':
             self.ticket=None
-            if self.s.get('active'): return self.stop('安全暂停待修复','未见结算即返回大厅；保留已尝试记录，不重新开同一关')
+            if self.s.get('active'):
+                if self.cfg.get('start_policy')=='current_screen':self.archive_unresolved_active('当前已在大厅；不回查旧关')
+                else:return self.stop('安全暂停待修复','未见结算即返回大厅；保留已尝试记录，不重新开同一关')
             self.action('大厅进入Episode',f.find(r'^Episode$',(1300,120,1599,330))); return True,4
         if mode=='map':
             d,rows,proof=self.map_ticket(f)
@@ -317,6 +349,8 @@ class Runner:
                 return self.stop('安全暂停待修复',proof)
             self.s['map_verification']=dict(target=d,proof=proof,rows=rows)
             a=self.s.get('active')
+            if a and self.cfg.get('start_policy')=='current_screen':
+                self.archive_unresolved_active('从当前地图选择新关；不回查原关是否通关');a=None
             if a:
                 oldrow=next((r for r in rows if r['stage']==a['stage']),None)
                 if d['episode']==a['episode'] and d['chapter']==a['chapter'] and oldrow and oldrow['green']>=14:
@@ -330,9 +364,15 @@ class Runner:
                 if d['stage']>=10:
                     self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
                 return self.stop('安全暂停待修复','当前已通关且无法可靠定位下一新关卡；未重复挑战')
-            if d['key'] in self.s['attempted']:
+            if d['key'] in self.s['attempted'] or d['key'] in self.s['completed']:
+                if self.cfg.get('start_policy')=='current_screen':
+                    candidates=[row for row in rows if row['stage']>d['stage'] and row['green']<14 and row.get('lock_score',0)<=.81 and f"E{d['episode']}-C{d['chapter']}-S{row['stage']}" not in self.s['attempted'] and f"E{d['episode']}-C{d['chapter']}-S{row['stage']}" not in self.s['completed']]
+                    if candidates:
+                        row=min(candidates,key=lambda item:item['stage']);self.ticket=None
+                        self.action('跳过已记录节点，选择当前列表下一新关',xy=(row['x'],row['y']));return True,3
+                    return self.attention('new_stage','请选择下一新关','当前列表没有可选择的新节点；请手动打开下一未尝试关后继续，不必补记旧关。')
                 return self.stop('安全暂停待修复',f"防重复入场：{d['key']} 已有尝试记录，不再次消耗体力")
-            if self.s.get('last_cleared'):
+            if self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen':
                 last=self.s['last_cleared']
                 if (d['episode'],d['chapter'],d['stage']) <= (last['episode'],last['chapter'],last['stage']):
                     return self.stop('安全暂停待修复','关卡编号未向前推进，拒绝倒退刷关')
@@ -347,7 +387,10 @@ class Runner:
             self.ticket['phase']='support'
             self.action('选择当前队伍',f.find('选择队伍',(1130,750,1599,899))); return True,3
         if mode=='team':
-            if self.s.get('active'): return self.stop('安全暂停待修复','已记录一次入场请求但仍在队伍页；不重复点击进行任务')
+            if self.s.get('active'):
+                if self.cfg.get('start_policy')=='current_screen':
+                    self.archive_unresolved_active('已有入场意图，返回当前地图而非重复开战');self.ticket=None;self.back('从当前地图继续');return True,3
+                return self.stop('安全暂停待修复','已记录一次入场请求但仍在队伍页；不重复点击进行任务')
             if not self.ticket or self.ticket.get('phase')!='support' or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('队伍界面没有完整地图验证链'); return True,3
             if not self.title_matches(f): return self.stop('安全暂停待修复','开战前关卡名称不一致，拒绝入场')
@@ -359,7 +402,7 @@ class Runner:
                 return self.stop('安全暂停待修复','连续20秒不能可靠读取入场消耗和剩余体力，拒绝猜测')
             match=re.search(r'(\d+)\s*/\s*(\d+)',cost['text']); required,available=map(int,match.groups())
             if required>100: return self.stop('安全暂停待修复','入场消耗读数异常')
-            if available<required: return self.stop('体力不足停止',f'开战前体力 {available} 小于消耗 {required}；没有打开兑换框')
+            if available<required: return self.attention('resource','体力不足',f'当前体力 {available} 小于消耗 {required}；手动处理后继续，没有打开兑换框。')
             self.s['stamina']=available
             hsv=cv2.cvtColor(f.image[650:710,900:1095],cv2.COLOR_BGR2HSV)
             isauto=np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
