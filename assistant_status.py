@@ -31,3 +31,11 @@ def activity(mode, task="mainline", observe=True, alive=False):
         "blocked": Activity("未运行 · 需要处理下方原因", "#a63d34"),
     }
     return states.get(mode, Activity("状态未知 · 不代表正在推进", "#a63d34"))
+
+
+def scene_caption(values):
+    """Compact progress text; successful farming count never means active entry won."""
+    stage=values.get('stage','')
+    if values.get('story_mode')=='farm' and stage:
+        return f"{stage} · 已成功 {values.get('farm_runs',0)} 次"
+    return values.get('scene','—')

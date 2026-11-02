@@ -122,3 +122,8 @@ class GuiActivityTests(unittest.TestCase):
         child.poll.return_value=0
         with patch('assistant_app.read_json',return_value=request):self.app.pump()
         self.app.start.assert_called_once();self.assertEqual(self.app.task.get(),'圣女3-7');self.assertIsNone(self.app.pending_restart)
+
+    def test_farming_counter_shows_confirmed_successes_not_current_battle(self):
+        self.worker('run');self.app.read_only=False
+        self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':'run','status':'本轮自动战斗中','scene':'battle','stage':'3-7','story_mode':'farm','farm_runs':2}))
+        self.app.pump();self.assertEqual(self.app.scene.get(),'3-7 · 已成功 2 次');self.assertEqual(self.app.mode,'run')

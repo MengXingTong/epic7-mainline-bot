@@ -1,4 +1,4 @@
-"""Control only the current unified worker; never starts/restarts a stopped run."""
+"""Run-bound controls; maintenance reloads go through the existing GUI, never the game."""
 import argparse,sys,uuid
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))

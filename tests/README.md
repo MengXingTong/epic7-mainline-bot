@@ -15,3 +15,7 @@ Real game screenshots and OCR fixtures are deliberately excluded. Set `EPIC7_PRI
 A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI has been tested live. PC input remains opt-in and experimental.
 
 - `test_pc_quickstart.py`: automatic account field discovery, bounded startup navigation, no daily configuration prompts, legacy history reuse, safe first-use initialization, account mismatch/active guards, read-only behavior and STOP restoration; all native APIs are faked.
+
+## Legacy story and Saint 3-7
+
+`test_story.py` covers exact preparation-stage reads, three/five-wave CLEAR, blue exits before/after settlement, native region routes, map panning, task switching and success-only repetition. Its synthetic policy cases run without private screenshots and never call native input. Saved-image regressions use `EPIC7_STORY_FIXTURES` (local `.local/story-validation` by default); absent private fixtures are explicitly skipped. `test_pc_backend.py` also checks drag cancellation, geometry changes, frame consumption and paired release using fakes.

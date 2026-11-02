@@ -1,6 +1,6 @@
 # 第七史诗 · 统一推进助手 v1.4.0 预览分享版
 
-Windows 64位离线软件，自带GUI、Python、OCR与识别资源。一个界面选择MuMu / PC、主线 / 普通深渊，不用安装Python或API Key。
+Windows 64位离线软件，自带GUI、Python、OCR与识别资源。一个界面选择MuMu / PC、剧情关卡 / 普通深渊 / 圣女3-7，不用安装Python或API Key。
 
 ## 使用
 

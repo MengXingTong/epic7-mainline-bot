@@ -1,5 +1,5 @@
 """Legacy story maps and success-only 3-7 repetition. No native input."""
-import copy,json,sys,time,unittest
+import copy,json,os,sys,time,unittest
 from pathlib import Path
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -8,7 +8,7 @@ from story_core import StoryController,map_info,read_stage,exit_target,entry_cos
 from task_blockers import TaskAttention
 ROOT=Path(__file__).resolve().parents[1]
 def fixture(name):
-    folder=ROOT/'.local/story-validation'
+    folder=Path(os.environ.get('EPIC7_STORY_FIXTURES',str(ROOT/'.local/story-validation')))
     if not (folder/(name+'.png')).exists():raise unittest.SkipTest('Private legacy story fixture not distributed')
     raw=json.loads((folder/(name+'-ocr.json')).read_text(encoding='utf-8'))
     im=runner.cv2.imdecode(runner.np.frombuffer((folder/(name+'.png')).read_bytes(),runner.np.uint8),runner.cv2.IMREAD_COLOR)
@@ -63,18 +63,29 @@ class LegacyScenes(unittest.TestCase):
     def test_three_region_cards_choose_goal_chapter_without_entry(self):
         f=fixture('region-cards');self.assertEqual(runner.classify(f),'legacy_story_regions')
         r,s=make(f);s.bind('圣王国伊杰拉');s.book.update(mode='farm',last_cleared='3-7')
-        s.step(f,'legacy_story_regions');self.assertIn('圣域最深处',r.action.call_args.args[0]);self.assertEqual(s.book['attempted'],{})
+        s.step(f,'legacy_story_regions');self.assertIn('黎塔尼亚北部',r.action.call_args.args[0]);self.assertEqual(s.book['attempted'],{})
     def test_region_route_override_expires_after_success_in_new_region(self):
         f=synthetic_team('2-1');r,s=make(f);s.bind('黎塔尼亚北部');s.book['last_cleared']='1-13'
         s.book['region_route']={'from_stage':'1-13','target_stage':'2-1'}
         s.enter(f,read_stage(f),f.find('进行任务'));s.clear('verified settlement')
         self.assertEqual(s.desired_stage(),'2-2');self.assertEqual(s.book['last_cleared'],'2-1')
+    def test_second_region_native_exit_does_not_assume_final_shortcut_name(self):
+        f=fixture('region-exit-2');r,s=make(f);s.bind('黎塔尼亚北部');s.book['last_cleared']='2-8'
+        s.step(f,'legacy_story_map');self.assertIn('下一剧情地区',r.action.call_args.args[0]);self.assertEqual(s.desired_stage(),'3-1')
+        self.assertNotIn('圣域最深处',r.action.call_args.args[0]);self.assertEqual(s.book['attempted'],{})
+    def test_goal_farming_can_navigate_from_previous_region_without_new_entry(self):
+        f=fixture('region-exit-2');r,s=make(f);s.bind('黎塔尼亚北部');s.book.update(mode='farm',last_cleared='3-7')
+        s.book['region_transitions']=[{'target_stage':'3-1','region':'铎雪挪克特'}]
+        s.step(f,'legacy_story_map');self.assertIn('返回目标 3-7',r.action.call_args.args[0]);self.assertEqual(s.book['attempted'],{});self.assertEqual(s.desired_stage(),'3-7')
+    def test_preparation_banner_is_not_region_name(self):
+        f=fixture('team-defense');self.assertEqual(read_stage(f)['region'],'圣王国伊杰拉')
     def test_support_and_team_keep_exact_stage_number(self):
         for name in ('prepare','team'):self.assertEqual(read_stage(fixture(name))['id'],'1-4')
         self.assertEqual(entry_cost(fixture('team')),(8,546))
     def test_blue_exit_is_navigation_not_repeat(self):
         f=fixture('legacy-exit');point=exit_target(f);self.assertGreaterEqual(point['dots'],5);self.assertGreater(point['x'],1500)
         self.assertEqual(runner.classify(f),'legacy_story_exit');r,s=make(f);s.bind('圣王国伊杰拉')
+        s.book['active']={'id':'pending','stage':'1-4'}
         s.step(f,'legacy_story_exit');self.assertIn('蓝色出口',r.action.call_args.args[0]);self.assertIn('xy',r.action.call_args.kwargs)
     def test_clear_banner_exit_ignores_blue_stone_floor_fragments(self):
         f=fixture('clear-1-6');target=exit_target(f,clear_overlay=True)
@@ -88,6 +99,10 @@ class LegacyScenes(unittest.TestCase):
         self.assertIsNone(exit_target(f,clear_overlay=True));r,s=make(f);s.bind('圣王国伊杰拉')
         s.book['active']={'id':'d','stage':'1-7'};s.step(f,'legacy_story_clear')
         self.assertTrue(s.book['active']['victory_seen']);self.assertIn('关闭CLEAR',r.action.call_args.args[0]);self.assertEqual(s.book['completed'],{})
+    def test_already_settled_blue_exit_leaves_instead_of_clicking_forever(self):
+        f=fixture('exit-after-clear-3-6');self.assertEqual(runner.classify(f),'legacy_story_exit')
+        r,s=make(f);s.bind('圣域最深处');s.book['last_cleared']='3-6'
+        s.step(f,'legacy_story_exit');self.assertEqual(r.action.call_args.kwargs['word']['text'],'离开');self.assertEqual(s.book['completed'],{})
     def test_dark_or_missing_exit_path_never_uses_fixed_click(self):
         f=fixture('legacy-exit');f.image[:]=0;self.assertIsNone(exit_target(f))
     def test_entry_intent_is_saved_before_input(self):
@@ -156,3 +171,12 @@ class StoryPolicyWithoutPrivateFiles(unittest.TestCase):
             with self.subTest(text=text):
                 other=copy.deepcopy(f);other.words.append(dict(text=text,x=800,y=400,score=.999));other.text+='\n'+text;other.clean=runner.norm(other.text)
                 self.assertEqual(runner.classify(other),expected)
+
+    def test_switching_to_general_story_does_not_trap_it_in_farming(self):
+        f=synthetic_team();r,s=make(f);s.bind('目标地区');s.book.update(mode='farm',last_cleared='3-7');s.book['stages']['3-7']={'success':True}
+        restored=StoryController(r,{'task':'mainline'})
+        self.assertEqual(restored.desired_stage(),'3-8');self.assertEqual(restored.book['mode'],'progress');self.assertIn('3-7',restored.book['stages'])
+    def test_selecting_saint_after_other_story_progress_returns_to_cleared_target(self):
+        f=synthetic_team();r,s=make(f);s.bind('目标地区');s.book.update(mode='progress',last_cleared='3-9');s.book['stages']['3-7']={'success':True}
+        restored=StoryController(r,{'task':'saint_3_7'})
+        self.assertEqual(restored.desired_stage(),'3-7');self.assertEqual(restored.book['mode'],'farm')

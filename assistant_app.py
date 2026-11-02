@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 from PIL import Image,ImageTk
 from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,validate_run,window_layout
-from assistant_status import activity
+from assistant_status import activity,scene_caption
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','PC 桌面端':'pc'}
 TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7'}
@@ -271,7 +271,7 @@ class Assistant:
                         incoming=data['mode']
                         if self.mode=='stopping' and incoming not in ('stopped','done','blocked'):continue
                         if self.mode=='pausing' and incoming not in ('paused','stopped','done','blocked'):continue
-                        self.mode=incoming;self.worker_warning=data.get('warning','');self.status.set(data['status']);self.scene.set(data.get('scene','—'));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
+                        self.mode=incoming;self.worker_warning=data.get('warning','');self.status.set(data['status']);self.scene.set(scene_caption(data));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
                     elif data.get('kind')=='log':self.log(data['text'])
                 elif kind=='exit' and self.process and data==self.process.pid:
                     self.lock_choices(False)

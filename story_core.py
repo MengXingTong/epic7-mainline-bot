@@ -27,7 +27,8 @@ def read_stage(f):
         if sid and word['score']>=.85 and 1120<=word['x']<=1599 and 135<=word['y']<=210:
             rows.append(dict(id=sid,name=STAGE_RE.match(word['text'])[3].strip(),word=word))
     if len(rows)!=1:return None
-    region=next((w['text'] for w in f.words if 1120<=w['x']<=1480 and 85<=w['y']<=135 and w['score']>=.85),'')
+    titles=sorted((w for w in f.words if 1120<=w['x']<=1390 and 85<=w['y']<=135 and w['score']>=.85 and '防御战成就' not in w['text']),key=lambda w:w['x'])
+    region=titles[0]['text'] if titles else ''
     return dict(rows[0],region=region)
 
 def map_info(f):
@@ -65,16 +66,19 @@ def region_cards(f):
     cards={chapter:f.find('^'+name+'$',(100,650,1450,780)) for chapter,name in SAINT_REGIONS.items()}
     return cards if all(cards.values()) else None
 
-def region_exit(f,chapter):
-    name=SAINT_REGIONS.get(chapter+1)
-    if not name:return None
-    word=f.find('^往'+name+'$',(100,130,1400,750))
-    if not word or word['score']<.9:return None
-    x,y=round(word['x']),round(word['y']-70)
-    tile=cv2.cvtColor(f.image[max(90,y-40):y+40,max(0,x-55):min(1470,x+55)],cv2.COLOR_BGR2HSV)
-    if tile.size==0:return None
-    green=np.count_nonzero((tile[:,:,0]>=30)&(tile[:,:,0]<=90)&(tile[:,:,1]>90)&(tile[:,:,2]>80))
-    return dict(x=x,y=y,name=name) if green>500 else None
+def region_exit(f,chapter,visited=(),target_name=None):
+    candidates=[]
+    for word in f.words:
+        match=re.fullmatch(r'往(.{2,12})',word['text'])
+        if not match or word['score']<.9 or not (100<=word['x']<=1400 and 130<=word['y']<=750):continue
+        name=match[1]
+        if target_name and name!=target_name or not target_name and name in visited:continue
+        x,y=round(word['x']),round(word['y']-70)
+        tile=cv2.cvtColor(f.image[max(90,y-40):y+40,max(0,x-55):min(1470,x+55)],cv2.COLOR_BGR2HSV)
+        if tile.size==0:continue
+        green=np.count_nonzero((tile[:,:,0]>=30)&(tile[:,:,0]<=90)&(tile[:,:,1]>90)&(tile[:,:,2]>80))
+        if green>500:candidates.append(dict(x=x,y=y,name=name))
+    return candidates[0] if len(candidates)==1 else None
 
 def completed_waves(f):
     word=f.find(r'([1-9])\s*/\s*([1-9])',(100,0,400,90))
@@ -94,7 +98,7 @@ def exit_target(f,clear_overlay=False):
     tile=cv2.cvtColor(f.image[350:810,1000:1590],cv2.COLOR_BGR2HSV)
     mask=np.uint8((tile[:,:,0]>=85)&(tile[:,:,0]<=120)&(tile[:,:,1]>(60 if clear_overlay else 100))&(tile[:,:,2]>(65 if clear_overlay else 180)))*255
     count,labels,stats,centers=cv2.connectedComponentsWithStats(mask)
-    dots=[(float(c[0]+1000),float(c[1]+350)) for s,c in zip(stats[1:],centers[1:]) if 40<=s[4]<=(900 if clear_overlay else 1600) and 8<=s[2]<=(45 if clear_overlay else 85) and 5<=s[3]<=(28 if clear_overlay else 70) and (not clear_overlay or s[2]>s[3])] 
+    dots=[(float(c[0]+1000),float(c[1]+350)) for s,c in zip(stats[1:],centers[1:]) if 40<=s[4]<=(900 if clear_overlay else 1600) and 8<=s[2]<=(45 if clear_overlay else 85) and 5<=s[3]<=(28 if clear_overlay else 70) and (not clear_overlay or s[2]>s[3])]
     if len(dots)<5:return None
     # Stone floors can produce similarly coloured fragments. Find the dotted
     # exit's diagonal consensus rather than letting one unrelated fragment veto it.
@@ -134,20 +138,23 @@ class StoryController:
         self.context=self.context or self.book_id is not None
         self.entry_wait_until=0
         self.selection_failures={}
+        if self.book_id in root.get('books',{}):
+            old=self.book;old['mode']='farm' if self.goal and (SAINT_STAGE in old.get('stages',{}) or old.get('mode')=='farm') else 'progress'
     @property
     def book(self):
         root=self.r.s.setdefault('story_progress',{'schema':1,'books':{}})
         return root['books'].setdefault(self.book_id,{'attempted':{},'completed':{},'stages':{},'active':None,'last_cleared':None,'mode':'progress','farm_runs':0})
-    def bind(self,region):
+    def bind(self,region,chapter=None):
         if not self.book_id:
             known=[key for key,value in self.r.s.get('story_progress',{}).get('books',{}).items() if region in value.get('regions_seen',[value.get('region')])]
             self.book_id=known[0] if len(known)==1 else 'legacy|'+region
         self.context=True;self.book['region']=region
         seen=self.book.setdefault('regions_seen',[])
         if region not in seen:seen.append(region)
+        if chapter:self.book.setdefault('chapter_regions',{})[str(chapter)]=region
         self.r.s['story_progress']['current_book']=self.book_id
     def desired_stage(self):
-        if self.book.get('mode')=='farm':return SAINT_STAGE
+        if self.goal and (self.book.get('mode')=='farm' or SAINT_STAGE in self.book.get('stages',{})):return SAINT_STAGE
         route=self.book.get('region_route',{})
         if route.get('from_stage')==self.book.get('last_cleared') and route.get('target_stage'):return route['target_stage']
         return next_stage(self.book['last_cleared']) if self.book.get('last_cleared') else None
@@ -157,7 +164,9 @@ class StoryController:
         return (self.book.get('active') or {}).get('stage') or self.book.get('last_cleared') or ''
     def wait(self,title,reason):return self.r.attention('story',title,reason)
     def act(self,kind,word=None,xy=None):
-        self.r.s.update(status='圣女3-7循环刷取中' if self.book.get('mode')=='farm' else '正在推进剧情关卡',reason=kind)
+        farming=self.goal and self.book.get('mode')=='farm'
+        detail=f'圣女3-7 · 已成功 {self.book.get("farm_runs",0)} 次 · {kind}' if farming else kind
+        self.r.s.update(status='圣女3-7循环刷取中' if farming else '正在推进剧情关卡',reason=detail)
         self.r.action(kind,word=word,xy=xy);return True,.6
     def remember_map(self,page):
         atlas=self.book.setdefault('map_atlas',{}).setdefault(page['region'],{})
@@ -170,13 +179,13 @@ class StoryController:
         return atlas
     def pan_for(self,desired,atlas):
         nav=self.book.setdefault('navigation',{})
-        tries=nav.get('pan_tries',0) if nav.get('desired')==desired else 0
+        tries=nav.get('pan_tries',0) if nav.get('desired')==desired and nav.get('pan_region')==self.book.get('region') else 0
         if tries>=4:return self.wait('当前地图未找到目标关','四次有界地图导航仍未出现 '+desired+'；不猜测入场。')
         point=atlas.get(desired)
         if point and (point['y']<160 or point['y']>750 or point['x']<150 or point['x']>1390):
             dx=max(-420,min(420,800-point['x']));dy=max(-350,min(350,480-point['y']))
         else:dx,dy=((0,-340),(400,0),(0,650),(-750,0))[tries]
-        nav.update(desired=desired,pan_tries=tries+1);self.r.s.update(status='正在推进剧情关卡',reason='后台移动地图查找 '+desired);self.r.save()
+        nav.update(desired=desired,pan_tries=tries+1,pan_region=self.book.get('region'));self.r.s.update(status='正在推进剧情关卡',reason='后台移动地图查找 '+desired);self.r.save()
         # Drag from unoccupied central terrain; each next input gets a fresh
         # captured frame and only a complete preparation number permits entry.
         start=(780,650 if dy<0 else 200 if dy>0 else 450)
@@ -220,15 +229,22 @@ class StoryController:
     def step(self,f,mode):
         page=map_info(f) if mode=='legacy_story_map' else None
         stage=read_stage(f) if mode in ('support','team') else None
-        if page:self.bind(page['region'])
-        elif stage:self.bind(stage['region'])
+        if page:
+            chapters={stage_order(r['id'])[0] for r in page['rows']}
+            self.bind(page['region'],next(iter(chapters)) if len(chapters)==1 else None)
+        elif stage:self.bind(stage['region'],stage_order(stage['id'])[0])
         if mode=='legacy_story_regions':
             if not self.book_id:self.book_id=SAINT_BOOK;self.context=True
             cards=region_cards(f)
             desired=self.desired_stage() or '1-1';chapter=stage_order(desired)[0]
-            if chapter not in cards:return self.wait('剧情地区超出已知布局','未选择未知地区。')
+            # The third overview card is a final-battle shortcut, not evidence
+            # that it contains numbered chapter 3. Navigate via a known region.
+            known=self.book.get('chapter_regions',{})
+            target_name=known.get(str(chapter)) or ({1:SAINT_REGIONS[1],2:SAINT_REGIONS[2]}.get(chapter))
+            card=next((word for word in cards.values() if word['text']==target_name),None)
+            if card is None:card=cards[2]
             self.book.setdefault('navigation',{}).update(desired=desired,overview_seen=True)
-            return self.act('进入剧情地区 '+SAINT_REGIONS[chapter],xy=(cards[chapter]['x'],cards[chapter]['y']-260))
+            return self.act('进入剧情地区 '+card['text'],xy=(card['x'],card['y']-260))
         if mode in ('lobby','map'):
             if self.goal:return self.wait('圣女3-7等待目标支线','请打开时间之书《圣女追悼文》；不会把主线当成圣女支线。')
             self.context=False;self.book_id=None
@@ -243,11 +259,24 @@ class StoryController:
                 return self.wait('剧情入场结果尚未结算','没有独立结算证据，不重复已入场关卡。')
             desired=self.desired_stage()
             if desired:
+                chapters={stage_order(r['id'])[0] for r in page['rows']};wanted_chapter=stage_order(desired)[0]
+                current=next(iter(chapters)) if len(chapters)==1 else None
+                if current and current!=wanted_chapter:
+                    neighbour=current+(1 if current<wanted_chapter else -1)
+                    previous=next((route for route in reversed(self.book.get('region_transitions',[])) if stage_order(route['target_stage'])[0]==neighbour),None)
+                    name=previous['region'] if previous else self.book.get('chapter_regions',{}).get(str(neighbour)) or {1:SAINT_REGIONS[1],2:SAINT_REGIONS[2]}.get(neighbour)
+                    gate=region_exit(f,current,self.book.get('regions_seen',[]),target_name=name)
+                    if gate:
+                        nav=self.book.setdefault('navigation',{});key=page['region']+'>'+desired;tries=nav.setdefault('region_tries',{}).get(key,0)
+                        if tries>=2:return self.wait('目标地区导航未生效','未进入未知关卡或重复消耗体力。')
+                        nav['region_tries'][key]=tries+1;self.r.save()
+                        return self.act('经原生地区入口返回目标 '+desired,xy=(gate['x'],gate['y']))
+                    return self.pan_for(desired,atlas)
                 row=next((r for r in page['rows'] if r['id']==desired),None)
                 if not row:
                     last=self.book.get('last_cleared')
                     chapter=stage_order(last)[0] if last else None
-                    gate=region_exit(f,chapter) if chapter and self.book.get('mode')!='farm' else None
+                    gate=region_exit(f,chapter,self.book.get('regions_seen',[])) if chapter and self.book.get('mode')!='farm' else None
                     # A native unlocked next-region arrow is a real progression
                     # route, not an invented N+1 stage. Preserve this route and
                     # verify the first complete number in the new preparation.
@@ -285,6 +314,8 @@ class StoryController:
                 return self.wait('剧情已发出一次入场请求','仍在准备页，不重复进行任务。')
             return self.enter(f,stage,f.find(r'^(进行任务|战斗开始)$',(1300,750,1599,899)))
         if mode in ('legacy_story_exit','legacy_story_clear'):
+            if mode=='legacy_story_exit' and not active:
+                return self.act('当前无待结算入场，离开至剧情地图选关',f.find(r'^离开$',(0,750,250,899)))
             target=exit_target(f,clear_overlay=mode=='legacy_story_clear')
             if not target and not (mode=='legacy_story_clear' and clear_banner(f)):return None
             if active and mode=='legacy_story_clear':
@@ -304,7 +335,8 @@ class StoryController:
             return self.act('剧情胜利页继续至结算',xy=(1550,845))
         if mode=='battle' and active:
             if time.time()-active['start_epoch']>1800:return self.wait('剧情单场超过30分钟','保留现场，不复活、不重试。')
-            self.r.s.update(status='剧情自动战斗中',reason='等待原生自动战斗与蓝色出口，不点击技能。');self.r.save();return True,2.5
+            detail=f'圣女3-7循环战斗中 · 已成功 {self.book.get("farm_runs",0)} 次；等待本轮结算。' if self.goal and self.book.get('mode')=='farm' else '等待原生自动战斗与蓝色出口，不点击技能。'
+            self.r.s.update(status='剧情自动战斗中',reason=detail);self.r.save();return True,2.5
         if mode=='post_clear_exit' and not active and self.book.get('last_cleared'):
             return self.act('结算后返回剧情地图，按目标选关',f.find(r'^离开$',(0,750,250,899)))
         return None
