@@ -25,7 +25,7 @@ def load_settings(home=HOME):
     saved=read_json(Path(home)/'settings.json')
     from assistant_portable import enabled,registered_root
     if enabled():
-        result={'client':'auto','task':'mainline','pc_input':'messages','limit':3,'observe':True,'data_dir':'','mumu':{}}
+        result={'client':'auto','task':'mainline','pc_input':'messages','limit':3,'observe':False,'data_dir':'','mumu':{}}
         if saved is not None:result.update(saved)
         root=registered_root(home)
         if root:result['data_dir']=str(root)
@@ -34,14 +34,16 @@ def load_settings(home=HOME):
             if not root.is_absolute():root=CODE_ROOT/root
             if not (root/'state.json').is_file():raise ValueError('原进度丢失；不初始化替代。')
             result['data_dir']=str(root.resolve())
+        result['observe']=False
         result['portable_first_use']=not bool(result.get('data_dir'))
         result['worker_python']=str(CODE_ROOT/'runtime'/'python.exe')
         return result
-    if saved is not None:return saved
+    if saved is not None:return {**saved,'observe':False}
     prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{})
-    root=prefs.get('data_dir','')
+    registered=registered_root(home)
+    root=prefs.get('data_dir','') or (str(registered) if registered else '')
     # Existing history is referenced in place, never copied/reset by the GUI.
-    result={'client':'auto','task':'abyss','pc_input':'messages','limit':3,'observe':True,
+    result={'client':'auto','task':'abyss','pc_input':'messages','limit':3,'observe':False,
             'data_dir':root,'worker_python':'','mumu':{}}
     hint=CODE_ROOT/'.local/python-path.txt'
     if hint.exists():result['worker_python']=hint.read_text(encoding='utf-8-sig').strip()
@@ -80,7 +82,7 @@ def validate_run(settings,target,allow_reconcile=False):
     if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
     if target['client']=='pc' and settings.get('pc_input') not in ('messages','foreground'):raise ValueError('Invalid PC input mode')
     from assistant_portable import enabled,registered_root
-    if enabled() and not settings.get('data_dir') and registered_root() is None:
+    if not settings.get('data_dir') and registered_root() is None:
         return HOME/'observations',{'attempted':{},'completed':{}}
     root,state=history_gate(settings)
     if settings['task']=='mainline' and not settings.get('observe',False):

@@ -77,6 +77,15 @@ class RecoveryTransactionTests(unittest.TestCase):
         self.assertEqual(new['manual_clears'],1);self.assertEqual(new['script_victories'],0)
         self.assertTrue((self.root/new['completed'][KEY]['evidence']).is_file());self.assertTrue(list((self.root/'private').glob('history-before-*.json')))
         tap.assert_not_called();guard.assert_called_once()
+    def test_selected_profile_recovery_never_reads_or_adds_account_binding(self):
+        self.state.pop('pc_profile_binding');(self.root/'state.json').write_text(json.dumps(self.state),encoding='utf-8')
+        proofs=[(self.node,'已通关绿色勾',None)]*2
+        with patch('runner.classify',return_value='map'),patch('runner.resource_warning',return_value=False),patch('mainline_reconcile.exact_map_proof',side_effect=proofs),patch('mainline_reconcile.match_account',side_effect=AssertionError('No account check')):
+            new=reconcile_live(self.root,self.state,None,Mock(side_effect=self.frames),Mock(),Mock(),private_dir=self.root/'private',selected_profile=True)
+        self.assertNotIn('pc_profile_binding',new)
+        self.assertEqual(new['attempted'][KEY]['outcome'],'defeat')
+        self.assertTrue(new['completed'][KEY]['manual_completed'])
+        self.assertEqual(new['reconciliation_history'][-1]['verification'],'selected_local_profile')
     def test_confirm_must_be_a_separate_fresh_frame(self):
         self.frames[1].at=self.frames[0].at
         with self.assertRaises(ReconcileBlocked):self.run_ok()
@@ -118,8 +127,8 @@ class ChapterChevronTests(unittest.TestCase):
     def test_other_episode_never_navigated(self):self.assertIsNone(chapter_back_target(self.frame(),{'episode':2,'chapter':1}))
     def test_current_chapter_does_not_go_back(self):self.assertIsNone(chapter_back_target(self.frame(1),{'episode':1,'chapter':1}))
 
-class StartupPairRegression(unittest.TestCase):
-    def test_pc_preflight_unpacks_proof_frame_pair(self):
+class SelectedTargetStartupRegression(unittest.TestCase):
+    def test_pc_start_skips_account_ocr_and_pins_selected_target(self):
         from assistant_worker import mainline_run
         from pc_backend import WindowSnapshot
         with tempfile.TemporaryDirectory() as d:
@@ -132,11 +141,11 @@ class StartupPairRegression(unittest.TestCase):
             class FakeBackend:
                 def __init__(inner,*args,**kwargs):inner.window=window
                 def snapshot(inner):return window
-                def authorize(inner,value):self.assertIsInstance(value,dict);self.assertEqual(value,proof)
+                def authorize_selected_target(inner,value):self.assertEqual(value,window.identity())
             settings=dict(data_dir=d,task='mainline',observe=False,limit=1,pc_input='messages')
             target=dict(client='pc',exe='EpicSeven.exe',title='第七史诗',hwnd=10,pid=20,created=30)
             ctl=Mock()
-            with patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='map'),patch('pc_backend.PcBackend',FakeBackend),patch('pc_message_backend.MessageWin32Api',return_value=Mock()),patch('pc_quickstart.inspect_account',return_value=(proof,sample_frame())),patch('pc_quickstart.return_to_game'),patch.dict('os.environ',{},clear=False):
+            with patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='map'),patch('pc_backend.PcBackend',FakeBackend),patch('pc_message_backend.MessageWin32Api',return_value=Mock()),patch('pc_quickstart.inspect_account',side_effect=AssertionError('Account OCR must not run')),patch('pc_quickstart.return_to_game'),patch.dict('os.environ',{},clear=False):
                 mainline_run(dict(settings=settings,target=target,run_dir=d,preflight_only=True),ctl)
             self.assertEqual(ctl.status.call_args.kwargs['mode'],'done')
 
@@ -156,14 +165,15 @@ class StartupPairRegression(unittest.TestCase):
                 def snapshot(inner):return window
                 def tap(inner,*args):raise AssertionError('No entry input belongs in this test')
                 def ensure(inner):return window
-                def authorize(inner,value):self.assertIsInstance(value,dict);self.assertEqual(value,proof)
+                def authorize_selected_target(inner,value):self.assertEqual(value,window.identity())
             settings=dict(data_dir=d,task='mainline',observe=False,limit=1,pc_input='messages')
             target=dict(client='pc',exe='EpicSeven.exe',title='第七史诗',hwnd=10,pid=20,created=30)
             ctl=Mock()
-            with patch('mainline_reconcile.reconcile_live',return_value=recovered) as recovery,patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='map'),patch('pc_backend.PcBackend',FakeBackend),patch('pc_message_backend.MessageWin32Api',return_value=Mock()),patch('pc_quickstart.inspect_account',return_value=(proof,sample_frame())),patch('pc_quickstart.return_to_game'),patch.dict('os.environ',{},clear=False):
+            with patch('mainline_reconcile.reconcile_live',return_value=recovered) as recovery,patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='map'),patch('pc_backend.PcBackend',FakeBackend),patch('pc_message_backend.MessageWin32Api',return_value=Mock()),patch('pc_quickstart.inspect_account',side_effect=AssertionError('Account OCR must not run')),patch('pc_quickstart.return_to_game'),patch.dict('os.environ',{},clear=False):
                 mainline_run(dict(settings=settings,target=target,run_dir=d,preflight_only=True),ctl)
             self.assertEqual(ctl.status.call_args.kwargs['mode'],'done')
             recovery.assert_called_once();self.assertEqual(recovery.call_args.args[1]['active']['key'],KEY)
+            self.assertIsNone(recovery.call_args.args[2]);self.assertTrue(recovery.call_args.kwargs['selected_profile'])
 
 class AdbAccountAdapterTests(unittest.TestCase):
     def make(self):

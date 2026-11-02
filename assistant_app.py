@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse,ctypes,json,os,queue,subprocess,sys,threading,time,uuid
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
 from PIL import Image,ImageTk
 from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,validate_run,window_layout
 from assistant_status import activity
@@ -13,9 +13,9 @@ TASKS={'普通深渊':'abyss','主线推进':'mainline'}
 INPUTS={'后台窗口消息 · 实验性':'messages','前台兼容模式':'foreground'}
 
 class Assistant:
-    def __init__(self,root,ui_check=False):
-        self.root=root;self.ui_check=ui_check;self.settings=load_settings();self.targets=[];self.filtered=[]
-        self.scanning=False;self.last_badge=None;self.status=tk.StringVar(value='尚未启动。检测到客户端后可选择观察或推进。')
+    def __init__(self,root,ui_check=False,read_only=False):
+        self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings();self.targets=[];self.filtered=[]
+        self.scanning=False;self.last_badge=None;self.status=tk.StringVar(value='尚未启动。选择客户端与任务后点开始推进。')
         self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False
         root.title('第七史诗 · 统一推进助手');root.configure(bg=BG)
         from ctypes import wintypes
@@ -90,7 +90,7 @@ class Assistant:
             tk.Label(cell,textvariable=var,bg=CARD,fg=INK,font=('Microsoft YaHei UI',10),wraplength=210,justify='left').pack(anchor='w',pady=(3,0))
         preview_card=self.card(outer)
         tk.Label(preview_card,text='客户端画面',bg=CARD,fg=INK,font=('Microsoft YaHei UI',10,'bold')).pack(anchor='w')
-        self.preview=tk.Label(preview_card,bg='#eaf0ec',fg=MUTED,text='开始观察后显示游戏画面\n\n截图仅在本机处理，不上传',font=('Microsoft YaHei UI',10),height=6)
+        self.preview=tk.Label(preview_card,bg='#eaf0ec',fg=MUTED,text='开始后显示游戏画面\n\n截图仅在本机处理，不上传',font=('Microsoft YaHei UI',10),height=6)
         self.preview.pack(fill='x',pady=(8,0))
         options=self.card(outer)
         row=tk.Frame(options,bg=CARD);row.pack(fill='x')
@@ -98,12 +98,10 @@ class Assistant:
         self.limit=tk.StringVar(value=str(self.settings.get('limit',3)))
         self.limit_box=ttk.Spinbox(row,from_=1,to=30,width=4,textvariable=self.limit);self.limit_box.pack(side='left',padx=8)
         tk.Label(row,text='关 / 层',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(side='left')
-        self.observe=tk.BooleanVar(value=bool(self.settings.get('observe',True)));self.confirm=tk.BooleanVar(value=False)
-        self.observe_box=ttk.Checkbutton(self.footer,text='仅观察，不发送任何点击',variable=self.observe,command=self.update_buttons,style='Footer.TCheckbutton');self.observe_box.pack(anchor='w',pady=(0,3))
-        self.confirm_box=ttk.Checkbutton(self.footer,text='已确认当前队伍及原生自动战斗，允许运行所选模式',variable=self.confirm,style='Footer.TCheckbutton');self.confirm_box.pack(anchor='w',pady=(0,7))
+        tk.Label(self.footer,text='开始即按当前队伍推进 · 不购买、不复活、不重试 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
         tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7).pack(fill='x',pady=(9,0))
         actions=tk.Frame(self.footer,bg=BG);actions.pack(fill='x')
-        self.start_button=self.button(actions,'开始观察',self.start,GREEN,'white');self.start_button.pack(side='left',fill='x',expand=True,padx=(0,8))
+        self.start_button=self.button(actions,'开始推进',self.start,GREEN,'white');self.start_button.pack(side='left',fill='x',expand=True,padx=(0,8))
         self.pause_button=self.button(actions,'暂停',self.pause,'#e2ebe5',INK);self.pause_button.pack(side='left',padx=(0,8))
         self.stop_button=self.button(actions,'停止',self.stop,'#e2ebe5',INK);self.stop_button.pack(side='left')
         self.note=tk.StringVar()
@@ -145,7 +143,7 @@ class Assistant:
         except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.update_buttons()
     def current_settings(self):
         value=dict(self.settings)
-        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input=INPUTS[self.input.get()],limit=int(self.limit.get()),observe=self.observe.get())
+        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input=INPUTS[self.input.get()],limit=int(self.limit.get()),observe=self.read_only)
         return value
     def filter_targets(self):
         client=CLIENTS[self.client.get()]
@@ -164,26 +162,26 @@ class Assistant:
         elif INPUTS[self.input.get()]=='messages':text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
         else:text='PC前台兼容：需保持游戏前台、无遮挡；不会自动抢焦点。'
         if not self.settings.get('data_dir'):
-            text+=' 首次使用：观察不建进度；推进前核对当前账号，已有记录先关联。'
+            text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
         elif TASKS[self.task.get()]=='mainline':
             try:
                 state=read_json(Path(self.settings.get('data_dir',''))/'state.json',{})
                 text+=' 原主线记录 '+str(len(state.get('completed',{})))+' 关；'
-                if state.get('terminal') or state.get('active'):text+='开始时先自动核对原关是否手动通关；未核实不重试、不清空历史。'
-            except Exception:text+='原主线记录需要检查，禁止空记录替代。'
+                if state.get('terminal') or state.get('active'):text+='开始时核对原关通关勾；未核实不重试、不清空历史。'
+            except Exception:text+='原进度需要检查，不能清空替代。'
         self.note.set(text)
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
-        label='继续观察' if self.mode=='paused' and self.observe.get() else ('继续推进' if self.mode=='paused' else ('开始观察' if self.observe.get() else '开始推进'))
-        if alive and self.mode!='paused':label={'starting':'检查中…','checking':'检查中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.observe.get() else '推进中…'}.get(self.mode,'等待进程退出…')
+        label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
+        if alive and self.mode!='paused':label={'starting':'检查中…','checking':'检查中…','waiting_focus':'等待游戏前台…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.scanning:label='检测客户端中…'
         self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode!='paused') else 'normal')
-        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking') else 'disabled')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','waiting_focus') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
     def update_activity(self):
         alive=bool(self.process and self.process.poll() is None)
-        view=activity('scanning' if self.scanning else self.mode,TASKS.get(self.task.get(),'mainline'),self.observe.get(),alive)
+        view=activity('scanning' if self.scanning else self.mode,TASKS.get(self.task.get(),'mainline'),self.read_only,alive)
         self.activity_title.configure(text=view.title,fg=view.color)
         self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode=='blocked' else INK)
         self.root.title(view.title.split(' · ')[0]+' | 第七史诗 · 统一推进助手')
@@ -203,7 +201,6 @@ class Assistant:
     def lock_choices(self,locked):
         for widget in (self.client_box,self.target_box,self.task_box,self.input_box):widget.configure(state='disabled' if locked else 'readonly')
         self.limit_box.configure(state='disabled' if locked else 'normal');self.refresh_button.configure(state='disabled' if locked else 'normal')
-        self.observe_box.configure(state='disabled' if locked else 'normal');self.confirm_box.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def scan(self):
         if self.scanning or (self.process and self.process.poll() is None):return
@@ -226,23 +223,12 @@ class Assistant:
             return
         try:
             settings=self.current_settings();target=self.selected_target();validate_run(settings,target,allow_reconcile=True)
-            if not settings['observe'] and not self.confirm.get():raise ValueError('请先确认队伍、原生自动战斗，并允许运行所选模式。')
             py=settings.get('worker_python','')
             if not Path(py).is_file():raise ValueError('工作运行库不存在，停止启动。')
-            first_consent=False;bind_consent=False
-            from assistant_portable import enabled,save_settings
-            if enabled() and not settings['observe']:
-                if not settings.get('data_dir'):
-                    first_consent=messagebox.askyesno('首次使用 · 登记自己的进度','这是本目录第一次使用。\n\n如果这个账号已有旧脚本记录，请取消并点“使用原进度”。不能新建空记录绕过失败或已入场关卡。\n\n确认这是首次使用、没有需要关联的旧记录，并允许自动导航到账号页核对当前账号？\n核对成功后只建立本机记录，不上传。',parent=self.root)
-                    if not first_consent:return
-                else:
-                    state=read_json(Path(settings['data_dir'])/'state.json')
-                    if not state.get('pc_profile_binding'):
-                        bind_consent=messagebox.askyesno('首次关联旧进度','这份旧记录还没有账号绑定。\n确认它属于当前已登录账号，并允许自动核对账号后绑定？\n将备份并保留所有尝试、失败、通关和证据；不会换绑已有账号。',parent=self.root)
-                        if not bind_consent:return
+            from assistant_portable import save_settings
             self.settings=settings;save_settings(settings)
             self.run_id=uuid.uuid4().hex;self.run_dir=HOME/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
-            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'first_use_consent':first_consent,'bind_existing_consent':bind_consent}
+            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'user_selected_profile':not self.read_only}
             atomic_json(self.run_dir/'request.json',request);self.command('run')
             self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
             atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
@@ -323,12 +309,12 @@ def main():
             handle=kernel.CreateMutexW(None,False,name)
             if not handle or ctypes.get_last_error()==183:return
             locks.append(handle)
-    root=tk.Tk();app=Assistant(root,args.ui_check)
+    root=tk.Tk();app=Assistant(root,args.ui_check,read_only=args.ui_exercise)
     if args.client:app.client.set(next(k for k,v in CLIENTS.items() if v==args.client))
     if args.task:app.task.set(next(k for k,v in TASKS.items() if v==args.task))
     app.update_note()
     if args.ui_exercise:
-        app.observe.set(True);app.task.set('普通深渊');app.client.set('PC 桌面端');app.update_buttons()
+        app.read_only=True;app.task.set('普通深渊');app.client.set('PC 桌面端');app.update_buttons()
         phase=[0];deadline=time.monotonic()+50
         def exercise():
             if phase[0]==0 and app.filtered:
@@ -349,7 +335,7 @@ def main():
         root.update_idletasks();root.update()
         image=Image.new('RGB',(294,165),'#e8f4ec');app.photo=ImageTk.PhotoImage(image);app.preview.configure(image=app.photo,text='',height=165)
         root.update_idletasks();root.update()
-        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'permission_visible':app.confirm_box.winfo_ismapped(),'permission_bottom':app.confirm_box.winfo_rooty()+app.confirm_box.winfo_height(),'observe_visible':app.observe_box.winfo_ismapped(),'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
+        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
         atomic_json(HOME/'ui-check.json',result);root.after(500,root.destroy)
     root.mainloop()
 

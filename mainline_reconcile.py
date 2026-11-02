@@ -74,13 +74,13 @@ def chapter_back_target(frame,active):
     if len(hits)!=1:raise ReconcileBlocked('未识别上一章左箭头，不猜测点击坐标。')
     return ('previous_chapter:'+str(ch),hits[0])
 
-def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=False,expected_server=None,private_dir=None,log=lambda text:None):
-    """Caller owns profile locks. Two live green proofs, exact account and CAS write."""
+def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=False,expected_server=None,private_dir=None,log=lambda text:None,selected_profile=False):
+    """Caller owns profile locks. Two green proofs + target guard + CAS; legacy mode also verifies account."""
     from runner import classify,resource_warning,now,atomic_json
     root=Path(root)
     if not pending_reconciliation(state):raise ReconcileBlocked('没有可安全核对的唯一原失败关卡，未修改历史。')
     if (root/'STOP').exists():raise ReconcileBlocked('用户STOP仍存在，未自动移除停止标记。')
-    binding=match_account(state,account,allow_initial,expected_server)
+    binding=None if selected_profile else match_account(state,account,allow_initial,expected_server)
     active=state['active'];seen=set();node=proof=frame=None
     for _ in range(14):
         frame=capture()
@@ -108,7 +108,8 @@ def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=Fa
     confirm=capture();second,second_proof,xy=exact_map_proof(confirm,active)
     if not second or second_proof!=proof or second['key']!=node['key'] or confirm.at<=frame.at:
         raise ReconcileBlocked('连续两帧原关卡通关证据不一致，未补记。')
-    match_account(state,account,allow_initial,expected_server);final_guard()
+    if not selected_profile:match_account(state,account,allow_initial,expected_server)
+    final_guard()
     original=json.loads((root/'state.json').read_text(encoding='utf-8-sig'))
     if original!=state:raise ReconcileBlocked('核对期间历史已变化，拒绝覆盖。')
     if (root/'STOP').exists():raise ReconcileBlocked('核对期间收到STOP，未改历史。')
@@ -119,8 +120,8 @@ def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=Fa
     before=Path(private_dir or evidence.parent)/('history-before-'+nonce+'.json');before.parent.mkdir(parents=True,exist_ok=True)
     atomic_json(before,original)
     new=manual_clear(state,second,second_proof,str(evidence.relative_to(root)),stamp)
-    new.setdefault('pc_profile_binding',{**binding,'bound_at':stamp,'source':'explicit_user_manual_clear_repair'})
-    new.setdefault('reconciliation_history',[]).append({'key':active['key'],'at':stamp,'previous_status':state.get('status'),'previous_reason':state.get('reason'),'previous_terminal':state.get('terminal'),'proof':str(evidence.relative_to(root)),'source':'two_live_exact_green_nodes'})
+    if binding is not None:new.setdefault('pc_profile_binding',{**binding,'bound_at':stamp,'source':'explicit_user_manual_clear_repair'})
+    new.setdefault('reconciliation_history',[]).append({'key':active['key'],'at':stamp,'previous_status':state.get('status'),'previous_reason':state.get('reason'),'previous_terminal':state.get('terminal'),'proof':str(evidence.relative_to(root)),'source':'two_live_exact_green_nodes','verification':'selected_local_profile' if selected_profile else 'account_binding'})
     new.update(terminal=False,status='手动通关已自动核实，可以继续主线',reason='保留原失败尝试和证据；原关两帧绿色通关勾一致，未重新入场。',updated_at=stamp,worker_pid=None)
     if json.loads((root/'state.json').read_text(encoding='utf-8-sig'))!=original:raise ReconcileBlocked('写入前历史发生变化，取消补记。')
     atomic_json(root/'state.json',new)

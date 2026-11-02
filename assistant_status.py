@@ -16,6 +16,7 @@ def activity(mode, task="mainline", observe=True, alive=False):
         return Activity("已停止 · 工作进程不在运行", "#a63d34")
     states = {
         "idle": Activity("未启动 · 当前没有任务在运行", "#65776f"),
+        "waiting_focus": Activity("等待游戏前台 · 未开始点击", "#956116", True),
         "scanning": Activity("检测客户端中 · 尚未启动任务", "#2465a4", True),
         "starting": Activity("未启动 · 正在准备", "#2465a4"),
         "checking": Activity("未启动 · 正在检查配置", "#2465a4"),

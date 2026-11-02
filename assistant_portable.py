@@ -66,3 +66,18 @@ def initialize_verified(proof,consent,home=HOME):
            'initialization':'first_use_verified_account','pc_profile_binding':{'server':proof['server'],'account_id':proof['account_id'],'bound_at':time.time()}}
     atomic_json(root/'state.json',state)
     return root,state
+
+
+def initialize_selected(consent,home=HOME):
+    """A Start click creates a genuinely first-use local profile, not an account binding."""
+    import time,uuid
+    if not consent:raise ValueError('没有开始指令；未初始化本机进度。')
+    if registered_root(home):raise ValueError('已有登记；禁止新建空记录替代。')
+    profile_id=uuid.uuid4().hex
+    root=Path(home)/'profiles'/profile_id
+    atomic_json(Path(home)/'profile.json',{'schema':1,'kind':'managed','data_dir':relative_or_absolute(root),'local_profile_id':profile_id})
+    root.mkdir(parents=True,exist_ok=False)
+    state={'schema':1,'started_at':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'attempted':{},'completed':{},'active':None,'victories':0,
+           'initialization':'first_use_user_selected_profile','local_profile_id':profile_id}
+    atomic_json(root/'state.json',state)
+    return root,state

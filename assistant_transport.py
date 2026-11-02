@@ -129,6 +129,10 @@ class AdbNavigationBackend:
         from pc_startup import navigation_target
         if self.digest!=hashlib.sha256(frame.image.tobytes()).digest():raise RuntimeError('MuMu账号导航画面不匹配。')
         kind,xy=navigation_target(frame);self._tap(*xy);return kind
+    def authorize_selected_target(self,target):
+        expected={k:self.transport.target[k] for k in ('serial','package')}
+        if {k:target[k] for k in ('serial','package')}!=expected:raise RuntimeError('MuMu selected instance changed')
+        self.transport.ensure();self.allowed=True
     def authorize(self,proof):
         if proof.get('window')!=self.window.identity() or not 0<=time.time()-proof.get('checked_at',0)<=120:raise RuntimeError('MuMu账号核对已失效。')
         self.allowed=True

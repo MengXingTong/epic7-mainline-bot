@@ -94,11 +94,13 @@ def abyss_run(request,control):
     history=read_json(history_path,{'schema':1,'clients':{}})
     label=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
     from assistant_portable import enabled
+    _,state=validate_run(settings,target,allow_reconcile=True)
     if enabled():
-        _,state=validate_run(settings,target,allow_reconcile=True)
         binding=state.get('pc_profile_binding',{})
         if binding:label='account|'+binding['server']+'|'+binding['account_id']
+        elif state.get('local_profile_id'):label='profile|'+state['local_profile_id']
     key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
+    if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
     previous=None;stable=0;cooldown=0;unknown=None
     while True:
@@ -166,8 +168,7 @@ def mainline_run(request,control):
     if target['client']=='mumu':
         cfg.update(settings['mumu']);cfg.update(backend='mumu_adb',serial=target['serial'],package=target['package'])
     else:
-        binding=state.get('pc_profile_binding',{})
-        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,server=binding.get('server',''),account_id=binding.get('account_id','')))
+        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,authorization_mode='selected_target'))
     config_file=Path(request['run_dir'])/'runtime-config.json';atomic_json(config_file,cfg)
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
     import runner
@@ -177,52 +178,31 @@ def mainline_run(request,control):
         def ensure_game(self):control.check();return super().ensure_game()
         def adb(self,*args,**kwargs):control.check();return super().adb(*args,**kwargs)
     r=ControlledRunner(observe=True)
+    backend=None
     if target['client']=='pc':
         from pc_backend import PcBackend,Win32Api
-        if settings['pc_input']=='messages':
-            from pc_message_backend import MessageWin32Api
-            api=MessageWin32Api()
-        else:api=Win32Api()
-        api=GuardedApi(api,control)
-        if request.get('_startup_backend'):r.pc=request['_startup_backend']
-        elif settings['observe']:r.pc=PcBackend(cfg['pc'],root/'STOP',api=api,read_only=True)
-        else:
-            if not cfg['pc']['server'] or not cfg['pc']['account_id']:raise RuntimeError('原主线记录尚无可核实的桌面账号绑定；保留历史，拒绝空记录启动。')
-            from pc_quickstart import inspect_account,capture_frame,return_to_game,same_account
-            from rapidocr_onnxruntime import RapidOCR
-            backend=PcBackend(cfg['pc'],root/'STOP',api=api)
-            current=backend.snapshot()
-            if (current.hwnd,current.pid,current.created)!=(target['hwnd'],target['pid'],target['created']):raise RuntimeError('所选桌面实例已变化，未切换目标。')
-            ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
-            capture=lambda:capture_frame(backend,ocr,Path(request['run_dir'])/'preflight')
-            control.status('自动核对当前已登录账号；不切服、不处理认证。',mode='checking')
-            proof,_=inspect_account(backend,capture)
-            if not same_account(proof,state['pc_profile_binding']):raise RuntimeError('当前账号与原主线历史不一致，未换绑。')
-            backend.authorize(proof);return_to_game(backend,capture);r.pc=backend
-            from mainline_reconcile import pending_reconciliation,reconcile_live
-            if pending_reconciliation(r.s):
-                control.status('正在自动核对原失败关的手动通关标记；不重打旧关。',mode='checking')
-                def final_guard():
-                    backend.ensure()
-                    if backend.window.identity()!=proof['window']:raise RuntimeError('核对窗口与账号证据不一致。')
-                r.s=reconcile_live(root,r.s,proof,capture,backend.tap,final_guard,private_dir=Path(request['run_dir']),log=control.log)
-    elif not settings['observe']:
-        from mainline_reconcile import pending_reconciliation,reconcile_live,match_account
+        from pc_message_backend import MessageWin32Api
+        api=MessageWin32Api() if settings['pc_input']=='messages' else Win32Api()
+        backend=PcBackend(cfg['pc'],root/'STOP',api=GuardedApi(api,control),read_only=settings['observe'])
+        identity={'hwnd':target['hwnd'],'pid':target['pid'],'created':target['created'],'exe':os.path.normcase(os.path.abspath(target['exe']))}
+        if not settings['observe']:backend.authorize_selected_target(identity)
+        r.pc=backend
+    if not settings['observe']:
+        from mainline_reconcile import pending_reconciliation,reconcile_live
         if pending_reconciliation(r.s):
-            from assistant_transport import AdbNavigationBackend
-            from pc_quickstart import inspect_account,capture_frame,return_to_game
-            backend=AdbNavigationBackend(settings,target,control.check)
+            from pc_quickstart import capture_frame
+            if target['client']=='mumu':
+                from assistant_transport import AdbNavigationBackend
+                backend=AdbNavigationBackend(settings,target,control.check);backend.authorize_selected_target(target)
             capture=lambda:capture_frame(backend,r.ocr,Path(request['run_dir'])/'preflight')
-            control.status('正在核对MuMu当前账号及原关通关标记，不重打。',mode='checking')
-            proof,_=inspect_account(backend,capture);match_account(r.s,proof)
-            backend.authorize(proof);return_to_game(backend,capture)
-            r.s=reconcile_live(root,r.s,proof,capture,backend.tap,backend.ensure,private_dir=Path(request['run_dir']),log=control.log)
+            control.status('正在核对原失败关的手动通关标记；不读取账号，不重打。',mode='checking')
+            r.s=reconcile_live(root,r.s,None,capture,backend.tap,backend.ensure,private_dir=Path(request['run_dir']),log=control.log,selected_profile=True)
     if not settings['observe']:
         from assistant_config import gate_mainline
         gate_mainline(r.s,(root/'STOP').exists())
     if request.get('preflight_only'):
         frame=r.capture()
-        control.status('主线启动核验通过；原失败关已补记，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
+        control.status('主线窗口与进度预检通过；未读取账号，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
         return
     baseline=len(r.s['completed']);deadline=None
     while True:
@@ -262,56 +242,51 @@ def observe_mainline(request,control):
         except PauseRun:control.paused()
 
 
-def prepare_portable_profile(request,control):
-    """Explicit consent + live account navigation only; no stage entry here."""
-    from assistant_portable import registered_root,initialize_verified,relative_or_absolute
-    from assistant_config import HOME,history_gate
-    from runtime_paths import exclusive_profile
-    from pc_quickstart import inspect_account,capture_frame,return_to_game
-    from mainline_reconcile import match_account
-    from rapidocr_onnxruntime import RapidOCR
+def wait_for_selected_foreground(request,control):
+    """Foreground compatibility needs user focus; never activate a window ourselves."""
     settings,target=request['settings'],request['target']
+    if target['client']!='pc' or settings.get('pc_input')!='foreground':return
+    from pc_backend import Win32Api
+    api=Win32Api();deadline=time.monotonic()+15
+    while True:
+        control.check()
+        rows=api.windows(target['exe'],target['title'])
+        if len(rows)!=1 or (rows[0].hwnd,rows[0].pid,rows[0].created)!=(target['hwnd'],target['pid'],target['created']):
+            raise RuntimeError('所选游戏窗口已变化；没有切换目标。')
+        if api.ready(rows[0]):return
+        remaining=max(0,int(deadline-time.monotonic()))
+        if not remaining:raise RuntimeError('15秒内未将所选游戏切到前台；任务未开始，不自动抢焦点。')
+        control.status(f'前台兼容模式：将所选游戏切到前台后自动继续（剩余{remaining}秒）；未开始点击。',mode='waiting_focus')
+        control.sleep(.3)
+
+
+def prepare_selected_profile(request,control):
+    """No account OCR/menu navigation. Register first use only after a verified game frame."""
+    settings=request['settings']
+    if settings.get('data_dir'):
+        from assistant_config import history_gate
+        root,_=history_gate(settings)
+        return root
+    if not request.get('user_selected_profile'):raise RuntimeError('缺少开始指令；请重新打开新版界面。')
+    from assistant_config import HOME
+    from assistant_portable import registered_root,initialize_selected
+    from runtime_paths import exclusive_profile
+    from assistant_transport import UnifiedTransport
+    from rapidocr_onnxruntime import RapidOCR
+    import cv2,numpy as np
+    from runner import Frame,classify
     with exclusive_profile(HOME):
-        initial=not settings.get('data_dir')
-        if initial:
-            if registered_root() is not None:raise RuntimeError('已发现本机登记；重新打开软件读取旧进度。')
-            if not request.get('first_use_consent'):raise RuntimeError('没有首次使用确认；未初始化。')
-            state={};stop_path=HOME/'STOP'
-        else:
-            root,state=history_gate(settings);stop_path=root/'STOP'
-            if stop_path.exists():raise RuntimeError('原进度存在STOP停止标记；保留标记，不自动继续。')
-            if not state.get('pc_profile_binding') and not request.get('bind_existing_consent'):
-                raise RuntimeError('旧历史未绑定；需要明确确认其属于当前账号。')
-        if target['client']=='pc':
-            from pc_backend import PcBackend,Win32Api
-            from pc_message_backend import MessageWin32Api
-            api=MessageWin32Api() if settings['pc_input']=='messages' else Win32Api()
-            cfg=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,server='',account_id='')
-            backend=PcBackend(cfg,stop_path,api=GuardedApi(api,control))
-            current=backend.snapshot()
-            if (current.hwnd,current.pid,current.created)!=(target['hwnd'],target['pid'],target['created']):raise RuntimeError('所选桌面目标已改变。')
-        else:
-            from assistant_transport import AdbNavigationBackend
-            backend=AdbNavigationBackend(settings,target,control.check)
-        ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
-        capture=lambda:capture_frame(backend,ocr,Path(request['run_dir'])/'account-check')
-        control.status('正在双帧核对当前账号；只进行已识别的账号菜单导航，尚未进入关卡。',mode='checking')
-        proof,_=inspect_account(backend,capture)
-        if not initial:match_account(state,proof,allow_initial=bool(request.get('bind_existing_consent')),expected_server=proof['server'])
-        if target['client']=='pc':backend.cfg.update(server=proof['server'],account_id=proof['account_id'])
-        backend.authorize(proof);return_to_game(backend,capture);control.check()
-        if initial:
-            root,state=initialize_verified(proof,request.get('first_use_consent'))
-        else:
-            with exclusive_profile(root):
-                if read_json(root/'state.json')!=state:raise RuntimeError('账号核对期间原进度变化；未写入。')
-                if not state.get('pc_profile_binding'):
-                    backup=root/('state.json.before-portable-binding-'+request['run_id'])
-                    with backup.open('xb') as f:f.write((root/'state.json').read_bytes())
-                    state['pc_profile_binding']={'server':proof['server'],'account_id':proof['account_id'],'bound_at':time.time(),'source':'explicit_import_consent'}
-                    atomic_json(root/'state.json',state)
+        if registered_root() is not None:raise RuntimeError('已存在登记；重新打开软件读取原进度，不新建空记录。')
+        transport=UnifiedTransport(settings,request['target'],control.check)
+        control.status('正在读取当前游戏画面；不读取账号、不打开设置。',mode='checking')
+        snap=transport.capture();control.preview(snap.image)
+        raw=cv2.resize(np.array(snap.image)[:,:,::-1].copy(),(1600,900))
+        ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2);results,_=ocr(raw)
+        scene=classify(Frame(raw,results))
+        if scene not in ('map','lobby'):raise RuntimeError('首次使用请停在大厅或主线地图；没有创建进度或发送点击。')
+        transport.ensure();control.check()
+        root,_=initialize_selected(True)
         settings.update(data_dir=str(root),portable_first_use=False)
-        if target['client']=='pc':backend.stop_path=root/'STOP';request['_startup_backend']=backend
         print(json.dumps({'kind':'profile','run_id':request['run_id'],'data_dir':str(root)},ensure_ascii=False),flush=True)
         return root
 
@@ -321,13 +296,14 @@ def run_request(request):
     try:
         root,_=validate_run(request['settings'],request['target'],allow_reconcile=True)
         from runtime_paths import exclusive_profile
-        from assistant_portable import enabled
         if request['settings']['observe']:
             # Independent observer never authorizes account navigation or writes state.
             root.mkdir(parents=True,exist_ok=True)
-        elif enabled():
+        else:
             while True:
-                try:root=prepare_portable_profile(request,control);break
+                try:
+                    wait_for_selected_foreground(request,control)
+                    root=prepare_selected_profile(request,control);break
                 except PauseRun:control.paused()
             validate_run(request['settings'],request['target'],allow_reconcile=True)
         with exclusive_profile(root):

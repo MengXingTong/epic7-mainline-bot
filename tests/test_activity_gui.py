@@ -15,7 +15,7 @@ class GuiActivityTests(unittest.TestCase):
     def tearDown(self):self.root.destroy();self.prefs.stop()
     def worker(self,mode='observe'):
         child=Mock();child.pid=123;child.poll.return_value=None
-        self.app.process=child;self.app.mode=mode;self.app.update_buttons();return child
+        self.app.read_only=mode=='observe';self.app.process=child;self.app.mode=mode;self.app.update_buttons();return child
     def event(self,mode,detail='current step'):
         self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':mode,'status':detail}))
         self.app.pump()
@@ -29,7 +29,7 @@ class GuiActivityTests(unittest.TestCase):
         self.assertEqual(self.app.start_button.cget('text'),'观察中…')
         self.assertEqual(self.app.start_button.cget('state'),'disabled')
     def test_live_run_and_detail_visible_in_fixed_header(self):
-        self.app.observe.set(False);self.worker('run');self.event('run','请等待原生战斗结束')
+        self.app.read_only=False;self.worker('run');self.event('run','请等待原生战斗结束')
         self.assertIn('正在推进',self.app.activity_title.cget('text'))
         self.assertIn('请等待',self.app.activity_detail.cget('text'))
         self.assertEqual(self.app.start_button.cget('text'),'推进中…')
@@ -49,3 +49,27 @@ class GuiActivityTests(unittest.TestCase):
     def test_stale_status_from_old_run_ignored(self):
         self.worker();self.app.events.put(('worker',{'kind':'status','run_id':'old','mode':'run','status':'old'}));self.app.pump()
         self.assertEqual(self.app.mode,'observe')
+
+    def test_user_interface_has_no_observation_or_confirmation_switch(self):
+        self.assertFalse(hasattr(self.app,'observe_box'));self.assertFalse(hasattr(self.app,'confirm_box'))
+        self.assertFalse(self.app.read_only)
+        self.assertFalse(self.app.current_settings()['observe'])
+        self.assertEqual(self.app.start_button.cget('text'),'开始推进')
+    def test_old_saved_observation_flag_does_not_block_direct_start(self):
+        self.app.settings['observe']=True
+        self.assertFalse(self.app.current_settings()['observe'])
+
+    def test_start_click_launches_directly_without_confirmation_dialog(self):
+        import tempfile,json,sys
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            home=Path(d);self.app.settings.update(worker_python=sys.executable,observe=True)
+            target={'client':'pc','label':'test'};self.app.filtered=[target];self.app.instance.set('test')
+            child=Mock();child.pid=123;child.poll.return_value=None
+            with patch('assistant_app.HOME',home),patch('assistant_app.validate_run',return_value=(home,{})),patch('assistant_portable.save_settings'),patch('assistant_app.subprocess.Popen',return_value=child) as launch,patch('assistant_app.threading.Thread'):
+                self.app.start()
+            launch.assert_called_once()
+            request=json.loads((self.app.run_dir/'request.json').read_text(encoding='utf-8'))
+            self.assertFalse(request['settings']['observe']);self.assertTrue(request['user_selected_profile'])
+            self.assertNotIn('first_use_consent',request);self.assertNotIn('bind_existing_consent',request)
+            self.assertEqual(self.app.start_button.cget('text'),'检查中…')

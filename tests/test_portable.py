@@ -65,3 +65,19 @@ class PortableProfileTests(unittest.TestCase):
         moved=self.root/'moved';shutil.copytree(self.home,moved/'data')
         with patch.object(portable,'CODE_ROOT',moved):
             self.assertEqual(portable.registered_root(moved/'data'),moved/root.relative_to(self.root))
+
+    def test_direct_start_creates_no_account_or_server_binding(self):
+        root,state=portable.initialize_selected(True,self.home)
+        self.assertEqual(state['initialization'],'first_use_user_selected_profile')
+        self.assertNotIn('pc_profile_binding',state)
+        self.assertNotIn('server',state);self.assertNotIn('account_id',state)
+        self.assertEqual(portable.registered_root(self.home),root)
+    def test_direct_start_cannot_replace_registered_or_lost_history(self):
+        root,_=portable.initialize_selected(True,self.home)
+        with self.assertRaises(ValueError):portable.initialize_selected(True,self.home)
+        (root/'state.json').unlink()
+        with self.assertRaises(ValueError):portable.initialize_selected(True,self.home)
+        self.assertFalse((root/'state.json').exists())
+    def test_direct_start_requires_start_command(self):
+        with self.assertRaises(ValueError):portable.initialize_selected(False,self.home)
+        self.assertFalse((self.home/'profile.json').exists())

@@ -40,6 +40,22 @@ class PcTests(unittest.TestCase):
             self.b=PcBackend(self.cfg,self.root/'STOP',api=self.api,clock=lambda:self.clock[0])
     def proof(self):return dict(server='Test realm',account_id='12345',window=self.api.window.identity(),checked_at=time.time())
     def ready(self):self.b.capture();self.b.authorize(self.proof())
+    def test_selected_target_authorization_needs_no_account_proof(self):
+        self.cfg.update(authorization_mode='selected_target');self.cfg.pop('server');self.cfg.pop('account_id')
+        self.b.authorize_selected_target(self.api.window.identity());self.b.capture();self.b.tap(800,450)
+        self.assertEqual([k for k,v in self.api.calls],['move','button','button'])
+    def test_selected_target_authorization_is_explicit_and_pinned(self):
+        with self.assertRaises(PcSafetyError):self.b.authorize_selected_target(self.api.window.identity())
+        self.cfg.update(authorization_mode='selected_target')
+        wrong={**self.api.window.identity(),'pid':99}
+        with self.assertRaises(PcSafetyError):self.b.authorize_selected_target(wrong)
+        self.assertEqual(self.api.calls,[])
+    def test_selected_target_still_requires_a_fresh_frame(self):
+        self.cfg.update(authorization_mode='selected_target');self.b.authorize_selected_target(self.api.window.identity())
+        with self.assertRaises(PcSafetyError):self.b.tap(800,450)
+        self.b.capture();self.clock[0]+=6
+        with self.assertRaises(PcSafetyError):self.b.tap(800,450)
+        self.assertEqual(self.api.calls,[])
     def test_no_input_without_account_preflight(self):
         self.b.capture()
         with self.assertRaises(PcSafetyError):self.b.tap(800,450)

@@ -83,6 +83,15 @@ class PcBackend:
         if preflight.get('window')!=current.identity():raise PcSafetyError('PC preflight belongs to another window/process')
         self.allowed=True
 
+    def authorize_selected_target(self,identity):
+        """Explicit GUI target selection, independent of server/account OCR."""
+        if self.read_only:raise PcSafetyError('Read-only PC backend cannot be authorized for input')
+        if self.cfg.get('authorization_mode')!='selected_target' or not self.cfg.get('experimental_input_enabled',False):
+            raise PcSafetyError('Selected-window authorization is not enabled')
+        current=self.snapshot()
+        if current.identity()!=identity:raise PcSafetyError('Selected PC window/process changed; no input')
+        self.allowed=True
+
     def navigate_account(self,frame):
         """Restricted preflight navigation, never general input authorization."""
         from pc_startup import navigation_target
@@ -110,7 +119,7 @@ class PcBackend:
     def ensure(self):
         if self.read_only:raise PcSafetyError('Read-only PC backend never sends input')
         self._stop_check()
-        if not self.allowed:raise PcSafetyError('PC input has no verified account/server authorization')
+        if not self.allowed:raise PcSafetyError('PC input has no verified target authorization')
         if self.frame_at is None or self.clock()-self.frame_at>5:
             raise PcSafetyError('Stale PC frame; no input sent')
         current=self.snapshot()
