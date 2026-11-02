@@ -1,0 +1,13 @@
+{
+  "backend": "stove_pc",
+  "data_dir": "",
+  "max_battle_seconds": 1800,
+  "pc": {
+    "game_exe": "",
+    "window_title": "第七史诗",
+    "server": "",
+    "account_id": "",
+    "allow_stretched_client": false,
+    "experimental_input_enabled": false
+  }
+}

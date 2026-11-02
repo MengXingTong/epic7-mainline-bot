@@ -7,13 +7,17 @@
 | 目标 | 状态 |
 |---|---|
 | MuMu Android 国际服、简体中文 UI、16:9 | 已实机运行；使用本地 ADB |
-| STOVE 官方 PC 客户端 | **适配中，尚未声明可无人值守运行** |
+| STOVE 官方 PC 客户端 | **实验性原生后端已加入，默认只读；完整实机验收未完成** |
 
 原 MuMu 离线分享包仍可使用。仓库仅保存可维护源码，不含 Python/OCR 运行库、游戏/ADB 二进制或账号数据。
 
 ## 更新与维护
 
 变更记录见 [CHANGELOG](CHANGELOG.md)，维护与发布检查见 [开发说明](docs/DEVELOPMENT.md)。
+
+## STOVE PC（实验性）
+
+不要求全屏。按实际游戏客户区和 DPI 映射坐标，不依赖显示器的固定分辨率。先阅读 [PC 使用说明与边界](docs/PC_GUIDE.md)，用 PCCheck 进行只读账号/服务器核对。默认 `experimental_input_enabled: false`；未经验收不要直接无人值守启动。
 
 ## 快速开始（MuMu）
 
@@ -48,11 +52,13 @@ py -3.12 launcher.py start
 py -3.12 -m unittest discover -s tests -v
 ```
 
-默认离线测试不连接游戏、无点击。涉及真实截图的回归素材不随仓库分发；本机可用 `EPIC7_PRIVATE_FIXTURES` 指定私有素材目录，缺少时明确跳过。
+默认离线测试不连接游戏、无点击。涉及真实截图的回归素材不随仓库分发；本机可用 `EPIC7_PRIVATE_FIXTURES` 与 `EPIC7_PC_FIXTURES` 指定自己的私有素材目录，缺少时明确跳过。
 
 ## 项目结构
 
 - `runner.py`：识别、校验链、持久化与动作状态机
+- `pc_backend.py` / `pc_launcher.py`：实验性 Windows 客户区后端与严格只读预检
+- `runtime_paths.py` / `state_tools.py`：共享账号运行目录与保留原尝试的人工补记
 - `supervisor.py`：有界重启与进程锁
 - `launcher.py`：MuMu 检查、启动、停止和安全续跑
 - `tests/`：离线安全与边界回归

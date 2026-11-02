@@ -1,7 +1,10 @@
 """Local worker supervisor: single instance, bounded restart, no game inputs."""
 import datetime as dt,json,msvcrt,os,subprocess,sys,time
 from pathlib import Path
-ROOT=Path(__file__).resolve().parent
+CODE_ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(CODE_ROOT))
+from runtime_paths import data_root
+ROOT=data_root()
 
 def read_state():
     try: return json.loads((ROOT/'state.json').read_text(encoding='utf8'))
@@ -22,7 +25,7 @@ def main():
             if state.get('terminal'): log('Terminal status retained: '+state.get('status','')); break
             env=os.environ.copy(); env['PYTHONIOENCODING']='utf-8'
             with (ROOT/'worker.stdout.log').open('a',encoding='utf8') as out:
-                child=subprocess.Popen([sys.executable,'-B','-X','utf8',str(ROOT/'runner.py')],stdout=out,stderr=subprocess.STDOUT,env=env,creationflags=subprocess.CREATE_NO_WINDOW)
+                child=subprocess.Popen([sys.executable,'-B','-X','utf8',str(CODE_ROOT/'runner.py')],stdout=out,stderr=subprocess.STDOUT,env=env,cwd=str(ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
                 log('Started worker pid '+str(child.pid)); start=time.time()
                 while child.poll() is None:
                     time.sleep(10)

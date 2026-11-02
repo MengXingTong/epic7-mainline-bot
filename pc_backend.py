@@ -1,0 +1,269 @@
+"""Experimental STOVE PC transport. Importing this module never touches Windows.
+
+Native API calls are isolated behind an injectable adapter for offline tests.
+No activation, login, server switching, installation or privilege bypass is done.
+"""
+from __future__ import annotations
+from contextlib import contextmanager
+from dataclasses import dataclass, asdict
+from pathlib import Path
+import os, time
+import numpy as np
+
+class PcSafetyError(RuntimeError):
+    pass
+
+@dataclass(frozen=True)
+class WindowSnapshot:
+    hwnd: int
+    pid: int
+    exe: str
+    created: int
+    x: int
+    y: int
+    width: int
+    height: int
+    dpi: int = 96
+
+    def identity(self):
+        return dict(hwnd=self.hwnd,pid=self.pid,exe=os.path.normcase(os.path.abspath(self.exe)),created=self.created)
+
+    def point(self,x,y):
+        if not (0 <= x < 1600 and 0 <= y < 900):
+            raise PcSafetyError('PC target is outside the normalized game client')
+        return self.x+min(self.width-1,int(x*self.width/1600)), self.y+min(self.height-1,int(y*self.height/900))
+
+class PcBackend:
+    def __init__(self,cfg,stop_path,api=None,clock=time.monotonic,read_only=False):
+        self.cfg=cfg;self.stop_path=Path(stop_path);self.clock=clock;self.read_only=read_only
+        self.api=api if api is not None else Win32Api()
+        self.window=None;self.frame_window=None;self.frame_at=None
+        self.allowed=False
+
+    def _stop_check(self):
+        if self.stop_path.exists():raise PcSafetyError('STOP marker exists; PC input disabled')
+
+    def snapshot(self):
+        if not self.read_only:self._stop_check()
+        candidates=self.api.windows(self.cfg['game_exe'],self.cfg.get('window_title','第七史诗'))
+        if len(candidates)!=1:raise PcSafetyError('Expected exactly one authorized PC game window')
+        current=candidates[0]
+        if current.width<640 or current.height<360:raise PcSafetyError('PC client too small; enlarge the window')
+        ratio=current.width/current.height
+        if not 1.4<=ratio<=2.4:raise PcSafetyError('Unsupported PC client aspect ratio')
+        if abs(ratio-16/9)>.03 and not self.cfg.get('allow_stretched_client',False):
+            raise PcSafetyError('Non-16:9 client needs explicit locally validated allow_stretched_client')
+        if self.window is not None and current.identity()!=self.window.identity():
+            raise PcSafetyError('PC game process/window changed; a new account preflight is required')
+        if not self.api.ready(current):raise PcSafetyError('PC game is unfocused, minimized, covered or off-screen')
+        self.window=current
+        return current
+
+    def capture(self):
+        before=self.snapshot();raw=self.api.capture(before)
+        after=self.snapshot()
+        if before!=after:raise PcSafetyError('PC geometry changed during capture')
+        if raw.shape!=(before.height,before.width,3):raise PcSafetyError('PC capture size does not match client area')
+        self.frame_window=after;self.frame_at=self.clock()
+        return raw
+
+    def authorize(self,preflight,max_age=120):
+        if self.read_only:raise PcSafetyError('Read-only PC backend cannot be authorized for input')
+        current=self.snapshot()
+        if not self.cfg.get('experimental_input_enabled',False):
+            raise PcSafetyError('Experimental PC input is disabled in configuration')
+        if time.time()-preflight.get('checked_at',0)>max_age or preflight.get('checked_at',0)>time.time()+5:
+            raise PcSafetyError('PC account preflight expired')
+        for key in ('server','account_id'):
+            if not self.cfg.get(key) or preflight.get(key)!=self.cfg[key]:
+                raise PcSafetyError('PC account/server proof does not match configuration')
+        if preflight.get('window')!=current.identity():raise PcSafetyError('PC preflight belongs to another window/process')
+        self.allowed=True
+
+    def ensure(self):
+        if self.read_only:raise PcSafetyError('Read-only PC backend never sends input')
+        self._stop_check()
+        if not self.allowed:raise PcSafetyError('PC input has no verified account/server authorization')
+        if self.frame_at is None or self.clock()-self.frame_at>5:
+            raise PcSafetyError('Stale PC frame; no input sent')
+        current=self.snapshot()
+        if current!=self.frame_window:raise PcSafetyError('PC window moved, resized or changed DPI after observation')
+        return current
+
+    def tap(self,x,y):
+        current=self.ensure();point=current.point(x,y)
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC click point is covered by another window')
+        self.api.move(*point)
+        self.ensure()
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target changed before mouse-down')
+        self.frame_at=None  # Consume even when the input result is unknown.
+        try:self.api.button(True)
+        finally:self.api.button(False)
+
+    def back(self):
+        self.ensure();self.frame_at=None;self.api.escape()
+
+    def hold(self,x,y,seconds=2.6):
+        if not 0<seconds<=4:raise PcSafetyError('Unexpected PC hold duration')
+        current=self.ensure();point=current.point(x,y)
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC hold target is covered')
+        self.api.move(*point);self.ensure()
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC hold target changed')
+        try:
+            self.api.button(True)
+            end=self.clock()+seconds
+            while self.clock()<end:
+                self.ensure()
+                if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target lost during hold')
+                time.sleep(.05)
+        finally:
+            self.api.button(False);self.frame_at=None
+
+class Win32Api:
+    """Foreground screen-copy backend; no PostMessage, hooks or game-memory access."""
+    def __init__(self):
+        if os.name!='nt':raise PcSafetyError('STOVE PC transport requires Windows')
+        import ctypes as c
+        from ctypes import wintypes as w
+        self.c=c;self.w=w
+        self.u=c.WinDLL('user32',use_last_error=True);self.g=c.WinDLL('gdi32',use_last_error=True);self.k=c.WinDLL('kernel32',use_last_error=True)
+        self.CB=c.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)
+        signatures=[
+            (self.u,'EnumWindows',[self.CB,w.LPARAM],w.BOOL),
+            (self.u,'GetForegroundWindow',[],w.HWND),
+            (self.u,'GetWindowThreadProcessId',[w.HWND,c.POINTER(w.DWORD)],w.DWORD),
+            (self.u,'GetWindowTextW',[w.HWND,w.LPWSTR,c.c_int],c.c_int),
+            (self.u,'GetClientRect',[w.HWND,c.POINTER(w.RECT)],w.BOOL),
+            (self.u,'GetWindowRect',[w.HWND,c.POINTER(w.RECT)],w.BOOL),
+            (self.u,'ClientToScreen',[w.HWND,c.POINTER(w.POINT)],w.BOOL),
+            (self.u,'IsWindowVisible',[w.HWND],w.BOOL),(self.u,'IsIconic',[w.HWND],w.BOOL),
+            (self.u,'GetAncestor',[w.HWND,w.UINT],w.HWND),
+            (self.u,'WindowFromPoint',[w.POINT],w.HWND),
+            (self.u,'GetDpiForWindow',[w.HWND],w.UINT),
+            (self.u,'SetThreadDpiAwarenessContext',[c.c_void_p],c.c_void_p),
+            (self.u,'GetDC',[w.HWND],w.HDC),(self.u,'ReleaseDC',[w.HWND,w.HDC],c.c_int),
+            (self.u,'SetCursorPos',[c.c_int,c.c_int],w.BOOL),
+            (self.u,'GetAsyncKeyState',[c.c_int],c.c_short),
+            (self.u,'GetSystemMetrics',[c.c_int],c.c_int),
+            (self.k,'OpenProcess',[w.DWORD,w.BOOL,w.DWORD],w.HANDLE),
+            (self.k,'QueryFullProcessImageNameW',[w.HANDLE,w.DWORD,w.LPWSTR,c.POINTER(w.DWORD)],w.BOOL),
+            (self.k,'GetProcessTimes',[w.HANDLE,c.POINTER(w.FILETIME),c.POINTER(w.FILETIME),c.POINTER(w.FILETIME),c.POINTER(w.FILETIME)],w.BOOL),
+            (self.k,'CloseHandle',[w.HANDLE],w.BOOL),
+            (self.g,'CreateCompatibleDC',[w.HDC],w.HDC),
+            (self.g,'CreateCompatibleBitmap',[w.HDC,c.c_int,c.c_int],w.HBITMAP),
+            (self.g,'SelectObject',[w.HDC,w.HGDIOBJ],w.HGDIOBJ),
+            (self.g,'DeleteObject',[w.HGDIOBJ],w.BOOL),(self.g,'DeleteDC',[w.HDC],w.BOOL),
+            (self.g,'BitBlt',[w.HDC,c.c_int,c.c_int,c.c_int,c.c_int,w.HDC,c.c_int,c.c_int,w.DWORD],w.BOOL),
+            (self.g,'GetDIBits',[w.HDC,w.HBITMAP,w.UINT,w.UINT,c.c_void_p,c.c_void_p,w.UINT],c.c_int),
+        ]
+        for lib,name,args,result in signatures:
+            fn=getattr(lib,name);fn.argtypes=args;fn.restype=result
+        ulong_ptr=c.c_size_t
+        class Mouse(c.Structure):_fields_=[('dx',w.LONG),('dy',w.LONG),('mouseData',w.DWORD),('flags',w.DWORD),('time',w.DWORD),('extra',ulong_ptr)]
+        class Key(c.Structure):_fields_=[('vk',w.WORD),('scan',w.WORD),('flags',w.DWORD),('time',w.DWORD),('extra',ulong_ptr)]
+        class Hardware(c.Structure):_fields_=[('msg',w.DWORD),('low',w.WORD),('high',w.WORD)]
+        class Data(c.Union):_fields_=[('mi',Mouse),('ki',Key),('hi',Hardware)]
+        class Input(c.Structure):_fields_=[('type',w.DWORD),('data',Data)]
+        self.Mouse=Mouse;self.Key=Key;self.Input=Input
+        self.u.SendInput.argtypes=[w.UINT,c.POINTER(Input),c.c_int];self.u.SendInput.restype=w.UINT
+
+    @contextmanager
+    def dpi(self):
+        old=self.u.SetThreadDpiAwarenessContext(self.c.c_void_p(-4))
+        if not old:raise PcSafetyError('Cannot establish per-monitor DPI-aware coordinates')
+        try:yield
+        finally:self.u.SetThreadDpiAwarenessContext(old)
+
+    def _windows(self):
+        result=[]
+        @self.CB
+        def callback(hwnd,_):result.append(hwnd);return True
+        if not self.u.EnumWindows(callback,0):raise PcSafetyError('Cannot enumerate PC windows')
+        return result
+
+    def _process(self,pid):
+        c,w=self.c,self.w;h=self.k.OpenProcess(0x1000,False,pid)
+        if not h:return None
+        try:
+            buf=c.create_unicode_buffer(32768);size=w.DWORD(len(buf));times=[w.FILETIME() for _ in range(4)]
+            if not self.k.QueryFullProcessImageNameW(h,0,buf,c.byref(size)):return None
+            if not self.k.GetProcessTimes(h,*[c.byref(t) for t in times]):return None
+            return buf.value,(times[0].dwHighDateTime<<32)|times[0].dwLowDateTime
+        finally:self.k.CloseHandle(h)
+
+    def windows(self,exe,title):
+        path=os.path.normcase(os.path.abspath(exe))
+        if Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('Only the explicitly configured EpicSeven.exe is allowed')
+        c,w=self.c,self.w;result=[]
+        with self.dpi():
+            for hwnd in self._windows():
+                if not self.u.IsWindowVisible(hwnd) or self.u.IsIconic(hwnd):continue
+                buf=c.create_unicode_buffer(1024);self.u.GetWindowTextW(hwnd,buf,len(buf))
+                if buf.value!=title:continue
+                pid=w.DWORD();self.u.GetWindowThreadProcessId(hwnd,c.byref(pid));p=self._process(pid.value)
+                if not p or os.path.normcase(os.path.abspath(p[0]))!=path:continue
+                r=w.RECT();point=w.POINT(0,0)
+                if not self.u.GetClientRect(hwnd,c.byref(r)) or not self.u.ClientToScreen(hwnd,c.byref(point)):continue
+                result.append(WindowSnapshot(int(hwnd),pid.value,p[0],p[1],point.x,point.y,r.right,r.bottom,self.u.GetDpiForWindow(hwnd)))
+        return result
+
+    def ready(self,s):
+        c,w=self.c,self.w
+        with self.dpi():
+            if self.u.GetForegroundWindow()!=s.hwnd or self.u.IsIconic(s.hwnd):return False
+            vx,vy,vw,vh=[self.u.GetSystemMetrics(i) for i in (76,77,78,79)]
+            if not (vx<=s.x and vy<=s.y and s.x+s.width<=vx+vw and s.y+s.height<=vy+vh):return False
+            found=False
+            for hwnd in self._windows():  # EnumWindows returns top-level Z order.
+                if hwnd==s.hwnd:found=True;break
+                if not self.u.IsWindowVisible(hwnd) or self.u.IsIconic(hwnd):continue
+                r=w.RECT()
+                if not self.u.GetWindowRect(hwnd,c.byref(r)):return False
+                if r.left<s.x+s.width and r.right>s.x and r.top<s.y+s.height and r.bottom>s.y:return False
+            return found
+
+    def point_is_target(self,s,x,y):
+        with self.dpi():return self.u.GetAncestor(self.u.WindowFromPoint(self.w.POINT(x,y)),2)==s.hwnd
+
+    def capture(self,s):
+        c,w=self.c,self.w
+        class Header(c.Structure):_fields_=[('size',w.DWORD),('width',w.LONG),('height',w.LONG),('planes',w.WORD),('bits',w.WORD),('compression',w.DWORD),('image_size',w.DWORD),('xppm',w.LONG),('yppm',w.LONG),('used',w.DWORD),('important',w.DWORD)]
+        class Info(c.Structure):_fields_=[('header',Header),('colors',w.DWORD*3)]
+        with self.dpi():
+            screen=self.u.GetDC(None);dc=None;bitmap=None;old=None
+            try:
+                if not screen:raise PcSafetyError('Cannot acquire screen device context')
+                dc=self.g.CreateCompatibleDC(screen);bitmap=self.g.CreateCompatibleBitmap(screen,s.width,s.height)
+                if not dc or not bitmap:raise PcSafetyError('Cannot create PC capture surface')
+                old=self.g.SelectObject(dc,bitmap)
+                if not old or old==c.c_void_p(-1).value:raise PcSafetyError('Cannot select PC capture bitmap')
+                if not self.g.BitBlt(dc,0,0,s.width,s.height,screen,s.x,s.y,0x00CC0020|0x40000000):raise PcSafetyError('PC client screen-copy failed')
+                self.g.SelectObject(dc,old);old=None
+                info=Info();info.header=Header(c.sizeof(Header),s.width,-s.height,1,32,0,0,0,0,0,0)
+                pixels=np.empty((s.height,s.width,4),np.uint8)
+                if self.g.GetDIBits(dc,bitmap,0,s.height,pixels.ctypes.data,c.byref(info),0)!=s.height:raise PcSafetyError('Incomplete PC screenshot')
+                return pixels[:,:,:3].copy()
+            finally:
+                if old:self.g.SelectObject(dc,old)
+                if bitmap:self.g.DeleteObject(bitmap)
+                if dc:self.g.DeleteDC(dc)
+                if screen:self.u.ReleaseDC(None,screen)
+
+    def move(self,x,y):
+        if any(self.u.GetAsyncKeyState(k)&0x8000 for k in (1,2,4,16,17,18,91,92)):
+            raise PcSafetyError('User is holding a mouse/modifier key; PC input cancelled')
+        with self.dpi():
+            if not self.u.SetCursorPos(x,y):raise PcSafetyError('Cannot position PC cursor')
+
+    def _send(self,item):
+        if self.u.SendInput(1,self.c.byref(item),self.c.sizeof(item))!=1:raise PcSafetyError('PC input was blocked; no privilege bypass attempted')
+
+    def button(self,down):
+        item=self.Input();item.type=0;item.data.mi=self.Mouse(0,0,0,2 if down else 4,0,0);self._send(item)
+
+    def escape(self):
+        if any(self.u.GetAsyncKeyState(k)&0x8000 for k in (1,2,4,16,17,18,91,92)):
+            raise PcSafetyError('User is holding an input key; Escape cancelled')
+        item=self.Input();item.type=1;item.data.ki=self.Key(0x1B,0,0,0,0)
+        try:self._send(item)
+        finally:item.data.ki.flags=2;self._send(item)

@@ -4,8 +4,11 @@ Every paid entry requires a fresh, positively verified uncleared map node.
 from __future__ import annotations
 import argparse, datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / 'vendor'))
+CODE_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(CODE_ROOT))
+sys.path.insert(0, str(CODE_ROOT / 'vendor'))
+from runtime_paths import data_root, config_path
+ROOT = data_root()
 for _stream in (sys.stdout,sys.stderr):
     if hasattr(_stream,'reconfigure'): _stream.reconfigure(encoding='utf-8',errors='replace')
 import cv2
@@ -53,7 +56,7 @@ def selected_node(f):
     if len(rows)>1 and rows[0]['cyan']-rows[1]['cyan']<.025: return None,rows
     chosen=rows[0]
     # A grey padlock is an additional veto; blue selection alone is insufficient.
-    p=ROOT/'assets'/'lock.png'
+    p=CODE_ROOT/'assets'/'lock.png'
     if p.exists():
         template=cv2.imdecode(np.frombuffer(p.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE)
         y=chosen['y']; patch=cv2.cvtColor(f.image[max(0,y+4):min(900,y+48),68:119],cv2.COLOR_BGR2GRAY)
@@ -129,9 +132,22 @@ def classify(f):
     return 'unknown'
 
 class Runner:
-    def __init__(self):
-        self.cfg=json.loads((ROOT/'config.json').read_text(encoding='utf-8-sig'))
+    def __init__(self,observe=False):
+        self.cfg=json.loads(config_path().read_text(encoding='utf-8-sig'))
+        if self.cfg.get('backend','mumu_adb') not in ('mumu_adb','stove_pc'):
+            raise RuntimeError('Unknown backend; no input allowed')
+        self.pc=None
+        if self.cfg.get('backend')=='stove_pc':
+            from pc_backend import PcBackend
+            if not (ROOT/'state.json').is_file():
+                raise RuntimeError('PC requires an explicitly selected existing profile state; no empty history created')
+            self.pc=PcBackend(self.cfg['pc'],ROOT/'STOP')
+            if not observe:self.pc.authorize(self.cfg.get('pc_preflight',{}))
         self.s=json.loads((ROOT/'state.json').read_text(encoding='utf8')) if (ROOT/'state.json').exists() else {'schema':1,'started_at':now(),'completed':{},'attempted':{},'active':None,'victories':0}
+        if self.pc and not observe:
+            binding=self.s.get('pc_profile_binding') or {}
+            if any(str(binding.get(k,''))!=str(self.cfg['pc'].get(k,'')) for k in ('server','account_id')):
+                raise RuntimeError('PC history has no matching account/server binding; use the explicit PC launcher')
         self.ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
         self.ticket=None; self.last_mode=None; self.mode_since=time.time(); self.battle_seen=0; self.last_gesture=0; self.last_stamina=None; self.unknown_gestures=0
     def adb(self,*args,timeout=25):
@@ -139,12 +155,15 @@ class Runner:
         if r.returncode: raise RuntimeError(r.stderr.decode(errors='replace')[:1000])
         return r.stdout
     def capture(self):
-        png=self.adb('exec-out','screencap','-p')
-        raw=cv2.imdecode(np.frombuffer(png,np.uint8),cv2.IMREAD_COLOR)
+        if getattr(self,'pc',None):
+            raw=self.pc.capture()
+        else:
+            png=self.adb('exec-out','screencap','-p')
+            raw=cv2.imdecode(np.frombuffer(png,np.uint8),cv2.IMREAD_COLOR)
         if raw is None: raise RuntimeError('Invalid Android screenshot')
         h,w=raw.shape[:2]
         if w<h: raise RuntimeError('Unexpected portrait orientation; no inputs sent')
-        if abs(w/h-16/9)>.03: raise RuntimeError('Use a 16:9 landscape emulator resolution; no inputs sent')
+        if not getattr(self,'pc',None) and abs(w/h-16/9)>.03: raise RuntimeError('Use a 16:9 landscape emulator resolution; no inputs sent')
         im=cv2.resize(raw,(1600,900)) if (w,h)!=(1600,900) else raw
         results,_=self.ocr(im)
         f=Frame(im,results,(w,h))
@@ -162,13 +181,15 @@ class Runner:
         self.s['script_victories']=self.s.get('victories',0)-self.s['manual_clears']
         atomic_json(ROOT/'state.json',self.s)
         active=self.s.get('active') or self.ticket or {}
-        text=(f"# MuMu 主线运行状态\n\n- 状态：**{self.s.get('status','启动中')}**\n- 更新时间：{self.s['updated_at']}（北京时间）\n- 当前/最近关卡：{active.get('key',self.s.get('last_stage','待识别'))} {active.get('name','')}\n- 本次已确认通关：{self.s.get('victories',0)} 关（脚本 {self.s.get('script_victories',0)}，用户手动补过 {self.s.get('manual_clears',0)}）\n- 最近读取体力：{self.s.get('stamina','未读取')}\n- 说明：{self.s.get('reason','')}\n- 最后动作：{self.s.get('last_action','无')}\n\n安全规则：不兑换/购买体力；不点重复挑战；已尝试关卡不再次入场；无法确认未通关时停止。\n\n最近画面见 latest.png；动作与安全检查见 events.jsonl；通关/尝试记录见 state.json。\n")
+        text=(f"# 第七史诗主线运行状态\n\n- 状态：**{self.s.get('status','启动中')}**\n- 更新时间：{self.s['updated_at']}（北京时间）\n- 当前/最近关卡：{active.get('key',self.s.get('last_stage','待识别'))} {active.get('name','')}\n- 本次已确认通关：{self.s.get('victories',0)} 关（脚本 {self.s.get('script_victories',0)}，用户手动补过 {self.s.get('manual_clears',0)}）\n- 最近读取体力：{self.s.get('stamina','未读取')}\n- 说明：{self.s.get('reason','')}\n- 最后动作：{self.s.get('last_action','无')}\n\n安全规则：不兑换/购买体力；不点重复挑战；已尝试关卡不再次入场；无法确认未通关时停止。\n\n最近画面见 latest.png；动作与安全检查见 events.jsonl；通关/尝试记录见 state.json。\n")
         tmp=ROOT/'STATUS.tmp.md'; tmp.write_text(text,encoding='utf8'); os.replace(tmp,ROOT/'STATUS.md')
     def evidence(self,label):
         p=ROOT/'evidence'/f"{dt.datetime.now(TZ):%H%M%S}-{label}.png"; p.parent.mkdir(exist_ok=True)
         p.write_bytes(cv2.imencode('.png',self.frame.image)[1].tobytes())
         return str(p.relative_to(ROOT))
     def ensure_game(self):
+        if getattr(self,'pc',None):
+            self.pc.ensure();return
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf8',errors='replace')
         resumed=[line for line in activity.splitlines() if 'topResumedActivity' in line or 'mResumedActivity' in line]
         if not any(self.cfg['package'] in line for line in resumed):
@@ -181,11 +202,13 @@ class Runner:
         w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
         event('action',action=kind,xy=coords,stage=(self.s.get('active') or self.ticket or {}).get('key'))
         self.s['last_action']=kind; self.save()
-        self.adb('shell','input','tap',*coords)
+        if getattr(self,'pc',None):self.pc.tap(x,y)
+        else:self.adb('shell','input','tap',*coords)
     def back(self,why):
         self.ensure_game()
         event('back',reason=why); self.s['last_action']='返回主线重新验证'; self.save()
-        self.adb('shell','input','keyevent','4')
+        if getattr(self,'pc',None):self.pc.back()
+        else:self.adb('shell','input','keyevent','4')
     def stop(self,status,reason):
         self.s.update(status=status,reason=reason,terminal=True,stop_at=now(),stop_evidence=self.evidence('STOP'))
         self.save(); event('stop',status=status,reason=reason); print(json.dumps({'status':status,'reason':reason},ensure_ascii=False),flush=True)
@@ -339,14 +362,19 @@ class Runner:
         # Full-screen CG: only during a recorded run, no popup labels, no battle HUD.
         a=self.s.get('active')
         if a and age>=12 and time.time()-self.battle_seen>12 and time.time()-self.last_gesture>25 and self.unknown_gestures<2:
-            if len(f.words)<=8 and not f.any('确认','确定','取消','购买','兑换','补充','使用','消耗','重试','商店','商店','返回','菜单') and f.image.mean()>20:
+            if len(f.words)<=8 and not f.any('确认','确定','取消','购买','兑换','补充','使用','消耗','重试','商店','返回','菜单','轻触画面开始','轻触屏幕开始','账号','服务器','登录','登陆','验证','STOVE') and f.image.mean()>20:
                 self.last_gesture=time.time(); self.unknown_gestures+=1
                 self.evidence('CG-before')
                 self.action('全屏CG第一下点击',xy=(800,450))
                 time.sleep(.12)
                 # Android touch gesture, not a Windows mouse operation. Same safe CG point.
                 w,h=f.raw_size; x,y=round(w/2),round(h/2)
-                self.adb('shell','input','swipe',x,y,x,y,2800)
+                if getattr(self,'pc',None):
+                    second=self.capture()
+                    if resource_warning(second) or classify(second)!='unknown' or len(second.words)>8:
+                        return self.stop('安全暂停待修复','PC长按前画面已变化；不继续CG手势')
+                    self.pc.hold(800,450,2.8)
+                else:self.adb('shell','input','swipe',x,y,x,y,2800)
                 event('action',action='全屏CG第二下按住2.8秒')
                 self.save(); return True,5
         if age>90: return self.stop('安全暂停待修复','未知画面持续90秒；不盲点确认、不回刷旧关')
@@ -368,12 +396,31 @@ class Runner:
             except KeyboardInterrupt: return
             except Exception as exc:
                 errors+=1; event('error',error=str(exc),trace=traceback.format_exc())
+                if getattr(self,'pc',None):
+                    self.s.update(status='PC安全暂停',reason=str(exc),terminal=True);self.save();return
                 self.s.update(status='异常重连中',reason=str(exc)); self.save()
                 if errors>=3:
                     self.s.update(status='安全暂停待修复',reason=f'连续三次异常：{exc}',terminal=True); self.save(); return
                 time.sleep(5)
                 try: subprocess.run([self.cfg['adb'],'connect',self.cfg['serial']],capture_output=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
                 except Exception: pass
+
+
+def record_pc_startup_failure(exc):
+    """Preserve history when native initialization fails before the run loop."""
+    try:
+        cfg=json.loads(config_path().read_text(encoding='utf-8-sig'))
+        if cfg.get('backend')!='stove_pc':return False
+        state=json.loads((ROOT/'state.json').read_text(encoding='utf8'))
+        state.update(terminal=True,status='PC启动安全暂停',reason=str(exc),updated_at=now())
+        atomic_json(ROOT/'state.json',state)
+        active=state.get('active') or state.get('last_cleared') or {}
+        text=(f"# 第七史诗主线运行状态\n\n- 状态：**PC启动安全暂停**\n- 更新时间：{state['updated_at']}\n- 当前/最近关卡：{active.get('key','未识别')}\n- 本次已确认通关：{len(state.get('completed',{}))}\n- 说明：{exc}\n\n启动未完成，不发送输入；全部原始入场/通关记录保留。\n")
+        (ROOT/'STATUS.md').write_text(text,encoding='utf8')
+        event('pc_startup_stop',error=str(exc),preserved_all_history=True)
+        return True
+    except Exception:return False
+
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--observe',action='store_true'); parser.add_argument('--step',action='store_true'); args=parser.parse_args()
@@ -383,7 +430,11 @@ def main():
     lock.seek(0)
     try: msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
     except OSError: print('Worker already running; no second runner created.'); return
-    try: Runner().run(once=args.step,observe=args.observe)
+    try:
+        try:Runner(observe=args.observe).run(once=args.step,observe=args.observe)
+        except Exception as exc:
+            if args.observe or not record_pc_startup_failure(exc):raise
+            print('PC startup safely stopped: '+str(exc),flush=True);return 1
     finally: lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1); lock.close()
-if __name__=='__main__': main()
+if __name__=='__main__': raise SystemExit(main())
 
