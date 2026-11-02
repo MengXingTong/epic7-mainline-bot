@@ -41,9 +41,9 @@ class HistoryTests(unittest.TestCase):
     def test_abyss_does_not_reset_mainline_terminal(self):validate_run({**self.settings,'task':'abyss'},PC)
     def test_unknown_task_rejected(self):
         with self.assertRaises(ValueError):validate_run({**self.settings,'task':'challenge'},PC)
-    def test_limit_bounds(self):
-        for value in (0,31):
-            with self.assertRaises(ValueError):validate_run({**self.settings,'limit':value},PC)
+    def test_old_limit_values_do_not_restrict_direct_start(self):
+        for value in (0,1,30,31,999999,None,'obsolete'):
+            validate_run({**self.settings,'start_policy':'current_screen','limit':value},PC)
     def test_missing_history_not_created(self):
         missing=self.root/'not-created'
         with self.assertRaises(ValueError):validate_run({**self.settings,'data_dir':str(missing)},PC)

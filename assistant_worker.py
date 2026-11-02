@@ -114,7 +114,7 @@ def discover(settings):
 
 
 def abyss_run(request,control):
-    from abyss_core import Observation,Token,Session,Scene,classify,RunComplete,PauseRequired
+    from abyss_core import Observation,Token,Session,Scene,classify,PauseRequired
     from abyss_templates import TemplateBank
     from assistant_transport import UnifiedTransport
     from rapidocr_onnxruntime import RapidOCR
@@ -124,7 +124,7 @@ def abyss_run(request,control):
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(CODE_ROOT/'assets/abyss' if (CODE_ROOT/'portable.json').exists() else CODE_ROOT/'.local/assistant/abyss-assets')
     if not bank.entries and not settings['observe']:raise RuntimeError('缺少本机深渊识别模板，已停止；不会盲点或下载素材。')
-    session=Session(limit=int(settings['limit']))
+    session=Session()
     history_path=Path(request['home'])/'abyss-history.json'
     history=read_json(history_path,{'schema':1,'clients':{}})
     label=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
@@ -188,10 +188,6 @@ def abyss_run(request,control):
                 else:transport.tap(snap,action.token,action.ordinary_gate)
                 session.applied(action);control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
             control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
-        except RunComplete as exc:
-            if session.last_won_floor is not None:
-                ledger['completed'].setdefault(str(session.last_won_floor),{'verified_clear_at':time.time()});atomic_json(history_path,history)
-            control.status(str(exc),mode='done',wins=session.wins,scene=Scene.CLEAR.value);return
         except TaskAttention as exc:
             control.attention(exc);previous=None;stable=0;cooldown=0;unknown=None
         except PauseRun:control.paused();previous=None;stable=0
@@ -252,7 +248,6 @@ def mainline_run(request,control):
             wins=len(r.s['completed'])-baseline
             control.status(r.s.get('reason','主线运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=len(r.s['completed']),stage=(r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''))
             if not keep:return
-            if wins>=int(settings['limit']):control.status('已达到本次主线关数上限，未进入下一关。',mode='done',wins=wins);return
             control.sleep(delay)
         except TaskAttention as exc:
             control.attention(exc);r.ticket=None;pacer.reset();r.s.pop('attention',None);r.save()

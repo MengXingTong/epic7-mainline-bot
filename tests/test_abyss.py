@@ -5,7 +5,7 @@ from PIL import Image
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from task_blockers import TaskAttention
-from abyss_core import Token,Observation,Scene,Session,Reading,PauseRequired,RunComplete,classify
+from abyss_core import Token,Observation,Scene,Session,Reading,PauseRequired,classify
 from abyss_templates import TemplateBank
 ROOT=Path(__file__).resolve().parents[1]
 FIXTURES=Path(os.environ.get('EPIC7_ABYSS_FIXTURES',str(ROOT/'tests/fixtures/abyss')))
@@ -56,13 +56,14 @@ class RealFrameTests(unittest.TestCase):
     def test_unrelated_team_never_starts(self):
         o=frame('team-052')
         with self.assertRaises(PauseRequired):Session().plan(classify(o),o)
-    def test_full_chain_and_one_floor_limit(self):
-        s=Session(limit=1);o=frame('clear-051');s.applied(s.plan(classify(o),o))
+    def test_full_chain_continues_after_first_clear(self):
+        s=Session();o=frame('clear-051');s.applied(s.plan(classify(o),o))
         self.assertEqual(s.expected_floor,52)
         o=frame('team-052');s.applied(s.plan(classify(o),o))
         o=frame('battle-052');self.assertIsNone(s.plan(classify(o,True),o))
         o=frame('clear-052')
-        with self.assertRaises(RunComplete):s.plan(classify(o),o)
+        next_action=s.plan(classify(o),o)
+        self.assertEqual((next_action.kind,next_action.target_floor),('advance',53))
         self.assertEqual(s.wins,1);self.assertEqual(s.last_won_floor,52)
         self.assertIsNone(s.expected_floor)
     def test_stale_clear_cannot_double_enter(self):

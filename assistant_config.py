@@ -25,7 +25,7 @@ def load_settings(home=HOME):
     saved=read_json(Path(home)/'settings.json')
     from assistant_portable import enabled,registered_root
     if enabled():
-        result={'client':'auto','task':'mainline','pc_input':'messages','limit':3,'observe':False,'data_dir':'','mumu':{}}
+        result={'client':'auto','task':'mainline','pc_input':'messages','observe':False,'data_dir':'','mumu':{}}
         if saved is not None:result.update(saved)
         root=registered_root(home)
         if root:result['data_dir']=str(root)
@@ -37,13 +37,15 @@ def load_settings(home=HOME):
         result.update(observe=False,pc_input='messages',start_policy='current_screen',fast_mode=True)
         result['portable_first_use']=not bool(result.get('data_dir'))
         result['worker_python']=str(CODE_ROOT/'runtime'/'python.exe')
-        return result
-    if saved is not None:return {**saved,'observe':False,'pc_input':'messages','start_policy':'current_screen','fast_mode':True}
+        result.pop('limit',None);return result
+    if saved is not None:
+        result={**saved,'observe':False,'pc_input':'messages','start_policy':'current_screen','fast_mode':True}
+        result.pop('limit',None);return result
     prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{})
     registered=registered_root(home)
     root=prefs.get('data_dir','') or (str(registered) if registered else '')
     # Existing history is referenced in place, never copied/reset by the GUI.
-    result={'client':'auto','task':'abyss','pc_input':'messages','limit':3,'observe':False,
+    result={'client':'auto','task':'abyss','pc_input':'messages','observe':False,
             'data_dir':root,'worker_python':'','mumu':{},'start_policy':'current_screen','fast_mode':True}
     hint=CODE_ROOT/'.local/python-path.txt'
     if hint.exists():result['worker_python']=hint.read_text(encoding='utf-8-sig').strip()
@@ -78,7 +80,6 @@ def gate_mainline(state,stop_exists=False):
 
 def validate_run(settings,target,allow_reconcile=False):
     if settings.get('task') not in ('mainline','abyss'):raise ValueError('Unknown task')
-    if not 1<=int(settings.get('limit',0))<=30:raise ValueError('本次上限须为1～30。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
     if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('Invalid PC input mode')
     from assistant_portable import enabled,registered_root

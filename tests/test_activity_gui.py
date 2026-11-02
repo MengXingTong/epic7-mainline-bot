@@ -97,3 +97,9 @@ class GuiActivityTests(unittest.TestCase):
         self.assertEqual(str(self.app.task_box.cget('state')),'readonly')
     def test_interface_has_no_foreground_selector(self):
         self.assertFalse(hasattr(self.app,'input_box'));self.assertEqual(self.app.current_settings()['pc_input'],'messages')
+
+    def test_interface_has_no_count_limit_or_legacy_setting(self):
+        self.app.settings['limit']=30
+        self.assertFalse(hasattr(self.app,'limit_box'));self.assertFalse(hasattr(self.app,'limit'))
+        self.assertIn('不设次数上限',self.app.run_policy.cget('text'))
+        self.assertNotIn('limit',self.app.current_settings())

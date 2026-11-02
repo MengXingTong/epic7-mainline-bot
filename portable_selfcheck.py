@@ -30,6 +30,7 @@ def main():
         ui=json.loads((Path(folder)/'ui-check.json').read_text(encoding='utf-8'))
         assert ui['controls_visible'] and ui['direct_start']
         assert not ui['observation_switch_present'] and not ui['account_check_required'] and not ui['foreground_selector_present']
+        assert not ui['count_limit_present'] and ui['continuous_run']
         assert ui['footer_bottom']<=ui['workarea'][3]
         result['gui']=ui
     result['result']='PASS - offline runtime/UI/resource checks only; no game input or account history created'

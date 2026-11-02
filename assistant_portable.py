@@ -30,7 +30,7 @@ def relative_or_absolute(path):
 
 
 def save_settings(settings,home=HOME):
-    value=dict(settings)
+    value=dict(settings);value.pop('limit',None)
     value.pop('portable_first_use',None)
     if enabled():
         value['worker_python']='runtime/python.exe'

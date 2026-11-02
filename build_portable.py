@@ -5,7 +5,7 @@ from pathlib import Path
 import argparse,hashlib,importlib.metadata,json,shutil,sys,zipfile
 ROOT=Path(__file__).resolve().parent
 SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.3.1-preview'
+VERSION='1.3.2-preview'
 
 
 def copy_tree(source,target):
@@ -98,7 +98,9 @@ def build_update(package):
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
 
-本次修复地图误判：未检测到星级不算已通关，已有入场记录不再被当成应跳过的已完成关。
+本次取消推进次数上限：界面移除次数输入，主线/普通深渊均持续推进，旧limit设置不再生效。
+不是把30改成更大的数字；没有隐藏的关数/层数上限。暂停、停止、战败和资源不足处理不变。
+保留地图误判修复：未检测到星级不算已通关，已有入场记录不当成应跳过的已完成关。
 每一行都检测锁定，不能再点击带锁的下一关；绿色像素改为通关徽章形状+节点绿环联合证据。
 识别有明确通关星级标签的0～3星文本作为补充；信用等级、英雄稀有度、章节星数不参与关卡完成判定。
 保留v1.3的导航提速、无确认按钮Rank升级页、后台短暂黑帧重取，不重复点击。

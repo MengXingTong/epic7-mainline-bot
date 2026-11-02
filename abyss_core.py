@@ -165,7 +165,6 @@ class Action:
 
 
 class PauseRequired(RuntimeError): pass
-class RunComplete(PauseRequired): pass
 
 
 @dataclass
@@ -176,7 +175,6 @@ class Session:
     baseline_floor: int | None=None
     expected_floor: int | None=None
     wins: int=0
-    limit: int=3
     phase: str="idle"
     last_action_key: str=""
     action_repeats: int=0
@@ -199,14 +197,11 @@ class Session:
             raise PauseRequired("战斗流程已被手动切换，已停止，不自动重新入场。")
         if scene==Scene.CLEAR:
             self.accept_clear(reading.floor)
-            if self.wins>=self.limit:
-                raise RunComplete(f"已完成 {self.wins} 层，停在第 {self.last_won_floor} 层通关页。")
             if self.expected_floor is not None:
                 if time.monotonic()<self.transition_until: return None
                 raise PauseRequired("下一层没有出现预期变化，未重复消耗体力。")
             return self._action("进入下一层准备页",o.find("下一层",region=(.78,.84,.99,.99)),
                                 f"clear-next:{reading.floor}",scene,kind="advance",target_floor=reading.floor+1)
-        if self.wins>=self.limit: raise RunComplete(f"已达到本次 {self.wins} 层上限。")
         if scene==Scene.LOBBY:
             if self.expected_floor is not None: raise PauseRequired("已离开预期深渊流程，请重新开始。")
             return self._action("打开大厅战斗",o.find("战斗",region=(.86,.34,.99,.57)),"lobby-battle",scene)

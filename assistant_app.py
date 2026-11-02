@@ -91,11 +91,8 @@ class Assistant:
         self.preview=tk.Label(preview_card,bg='#eaf0ec',fg=MUTED,text='开始后显示游戏画面\n\n截图仅在本机处理，不上传',font=('Microsoft YaHei UI',10),height=6)
         self.preview.pack(fill='x',pady=(8,0))
         options=self.card(outer)
-        row=tk.Frame(options,bg=CARD);row.pack(fill='x')
-        tk.Label(row,text='本次最多推进',bg=CARD,fg=INK,font=('Microsoft YaHei UI',10)).pack(side='left')
-        self.limit=tk.StringVar(value=str(self.settings.get('limit',3)))
-        self.limit_box=ttk.Spinbox(row,from_=1,to=30,width=4,textvariable=self.limit);self.limit_box.pack(side='left',padx=8)
-        tk.Label(row,text='关 / 层',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(side='left')
+        self.run_policy=tk.Label(options,text='持续推进 · 不设次数上限',bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'))
+        self.run_policy.pack(anchor='w')
         tk.Label(self.footer,text='开始即按当前队伍推进 · 不购买、不复活、不重试 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
         tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7).pack(fill='x',pady=(9,0))
         actions=tk.Frame(self.footer,bg=BG);actions.pack(fill='x')
@@ -140,8 +137,8 @@ class Assistant:
             self.status.set('已关联原进度 '+str(len(state['completed']))+' 关；任务未启动，原记录未修改。');self.update_note();self.update_buttons();self.scan()
         except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.update_buttons()
     def current_settings(self):
-        value=dict(self.settings)
-        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input='messages',start_policy='current_screen',fast_mode=True,limit=int(self.limit.get()),observe=self.read_only)
+        value=dict(self.settings);value.pop('limit',None)
+        value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input='messages',start_policy='current_screen',fast_mode=True,observe=self.read_only)
         return value
     def filter_targets(self):
         client=CLIENTS[self.client.get()]
@@ -202,7 +199,7 @@ class Assistant:
 
     def lock_choices(self,locked):
         for widget in (self.client_box,self.target_box,self.task_box):widget.configure(state='disabled' if locked else 'readonly')
-        self.limit_box.configure(state='disabled' if locked else 'normal');self.refresh_button.configure(state='disabled' if locked else 'normal')
+        self.refresh_button.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def scan(self):
         if self.scanning or (self.process and self.process.poll() is None):return
@@ -337,7 +334,7 @@ def main():
         root.update_idletasks();root.update()
         image=Image.new('RGB',(294,165),'#e8f4ec');app.photo=ImageTk.PhotoImage(image);app.preview.configure(image=app.photo,text='',height=165)
         root.update_idletasks();root.update()
-        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'foreground_selector_present':hasattr(app,'input_box'),'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
+        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'foreground_selector_present':hasattr(app,'input_box'),'count_limit_present':hasattr(app,'limit_box'),'continuous_run':True,'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
         atomic_json(HOME/'ui-check.json',result);root.after(500,root.destroy)
     root.mainloop()
 
