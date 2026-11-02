@@ -10,6 +10,7 @@ sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash
+from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 import copy
 ROOT = data_root()
 for _stream in (sys.stdout,sys.stderr):
@@ -63,28 +64,24 @@ class Frame:
 
 def selected_node(f):
     hsv=cv2.cvtColor(f.image,cv2.COLOR_BGR2HSV)
+    p=CODE_ROOT/'assets'/'lock.png'
+    lock_template=cv2.imdecode(np.frombuffer(p.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE) if p.exists() else None
     rows=[]
     for w in f.words:
         m=re.match(r'^\s*(\d{1,2})\s*[.．、。]\s*(.+)',w['text'])
-        if not m or not (100<=w['x']<=650 and 190<=w['y']<=730): continue
-        y=int(round(w['y'])); yy,xx=np.ogrid[:900,:1600]; rr=(xx-68)**2+(yy-y)**2
-        ring=(rr>=39**2)&(rr<=61**2)&(xx<130)
-        cyan=(hsv[:,:,0]>=80)&(hsv[:,:,0]<=112)&(hsv[:,:,1]>90)&(hsv[:,:,2]>125)
-        score=float(np.count_nonzero(cyan&ring)/max(1,np.count_nonzero(ring)))
-        patch=hsv[max(0,y+7):min(900,y+43),77:112]
-        green=int(np.count_nonzero((patch[:,:,0]>=32)&(patch[:,:,0]<=85)&(patch[:,:,1]>115)&(patch[:,:,2]>90)))
-        rows.append(dict(stage=int(m.group(1)),name=m.group(2),y=y,x=w['x'],cyan=round(score,4),green=green))
-    rows.sort(key=lambda x:x['cyan'],reverse=True)
-    if not rows or rows[0]['cyan']<.055: return None,rows
-    if len(rows)>1 and rows[0]['cyan']-rows[1]['cyan']<.025: return None,rows
+        if not m or not (100<=w['x']<=650 and 190<=w['y']<=730):continue
+        y=int(round(w['y']))
+        row=dict(stage=int(m.group(1)),name=m.group(2),y=y,x=w['x'],**row_markers(f.image,hsv,y,lock_template))
+        rows.append(row)
+    rows.sort(key=lambda row:row['cyan'],reverse=True)
+    if not rows or rows[0]['cyan']<.055:return None,rows
+    if len(rows)>1 and rows[0]['cyan']-rows[1]['cyan']<.025:return None,rows
     chosen=rows[0]
-    # A grey padlock is an additional veto; blue selection alone is insufficient.
-    p=CODE_ROOT/'assets'/'lock.png'
-    if p.exists():
-        template=cv2.imdecode(np.frombuffer(p.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE)
-        y=chosen['y']; patch=cv2.cvtColor(f.image[max(0,y+4):min(900,y+48),68:119],cv2.COLOR_BGR2GRAY)
-        if patch.shape[0]>=template.shape[0] and patch.shape[1]>=template.shape[1]:
-            chosen['lock_score']=float(cv2.matchTemplate(patch,template,cv2.TM_CCOEFF_NORMED).max())
+    rating=read_stage_rating(f)
+    chosen.update(star_count=rating['count'] if rating else None,star_evidence=rating)
+    if rating and not chosen['locked']:
+        if rating['count']==0 and chosen['clear_badge']:chosen['completion']='conflict'
+        else:chosen['completion']='cleared' if rating['count']>0 else 'uncleared'
     return chosen,rows
 
 def resource_warning(f):
@@ -278,8 +275,9 @@ class Runner:
         episode=int(re.search(r'\d+',e['text']).group()); chapter=int(re.search(r'\d+',c['text']).group())
         d=dict(episode=episode,chapter=chapter,**node)
         d['key']=f"E{episode}-C{chapter}-S{node['stage']}"; d['verified_epoch']=time.time()
-        if node['green']>=14: return d,rows,'已通关绿色勾'
-        if node.get('lock_score',0)>.81: return d,rows,'锁定关卡'
+        if node['locked']:return d,rows,'锁定关卡'
+        if node['completion']=='conflict':return d,rows,'当前通关标记不一致'
+        if is_cleared(node):return d,rows,'已通关绿色勾' if node['clear_badge'] else '已通关关卡星级'
         return d,rows,'未通关蓝色当前节点'
     def title_matches(self,f):
         if not self.ticket: return False
@@ -353,24 +351,22 @@ class Runner:
                 self.archive_unresolved_active('从当前地图选择新关；不回查原关是否通关');a=None
             if a:
                 oldrow=next((r for r in rows if r['stage']==a['stage']),None)
-                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and oldrow and oldrow['green']>=14:
+                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and is_cleared(oldrow):
                     self.completed('返回地图后，原关卡出现绿色已通关勾')
                 else: return self.stop('安全暂停待修复','已入场但未确认通关；保留尝试记录，不重复开战')
             if proof=='锁定关卡': return self.stop('安全暂停待修复','当前节点仍锁定；不入场、不回刷旧关')
-            if proof=='已通关绿色勾' or d['key'] in self.s['completed']:
+            if proof=='当前通关标记不一致':return self.attention('stage_rating','当前关通关标记不一致','已读到的星级和通关勾互相矛盾，未将此关判为完成；刷新当前关后继续。')
+            if proof in CLEAR_PROOFS:
                 nextrow=next((r for r in rows if r['stage']==d['stage']+1),None)
-                if nextrow and nextrow['green']<14:
+                if nextrow and is_unlocked(nextrow) and not is_cleared(nextrow):
                     self.ticket=None; self.action('避开已通关关卡，选择下一关',xy=(nextrow['x'],nextrow['y'])); return True,3
+                if nextrow and not is_unlocked(nextrow):return self.attention('locked_next','下一关尚未解锁','当前关通关标记已识别，但下一关仍带锁；不会点击锁定关卡。')
                 if d['stage']>=10:
                     self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
                 return self.stop('安全暂停待修复','当前已通关且无法可靠定位下一新关卡；未重复挑战')
             if d['key'] in self.s['attempted'] or d['key'] in self.s['completed']:
                 if self.cfg.get('start_policy')=='current_screen':
-                    candidates=[row for row in rows if row['stage']>d['stage'] and row['green']<14 and row.get('lock_score',0)<=.81 and f"E{d['episode']}-C{d['chapter']}-S{row['stage']}" not in self.s['attempted'] and f"E{d['episode']}-C{d['chapter']}-S{row['stage']}" not in self.s['completed']]
-                    if candidates:
-                        row=min(candidates,key=lambda item:item['stage']);self.ticket=None
-                        self.action('跳过已记录节点，选择当前列表下一新关',xy=(row['x'],row['y']));return True,3
-                    return self.attention('new_stage','请选择下一新关','当前列表没有可选择的新节点；请手动打开下一未尝试关后继续，不必补记旧关。')
+                    return self.attention('current_stage_unresolved','当前关未显示通关',f"{d['key']} 只有原入场/历史记录，当前画面没有明确通关标记；不当作已完成跳关、不点击后面的锁定关。处理当前关后可从所选新关继续，不回查旧关。")
                 return self.stop('安全暂停待修复',f"防重复入场：{d['key']} 已有尝试记录，不再次消耗体力")
             if self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen':
                 last=self.s['last_cleared']

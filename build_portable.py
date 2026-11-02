@@ -4,8 +4,8 @@ No download, publishing, live config copy, or account files. Runtimes stay untra
 from pathlib import Path
 import argparse,hashlib,importlib.metadata,json,shutil,sys,zipfile
 ROOT=Path(__file__).resolve().parent
-SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.3-preview'
+SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
+VERSION='1.3.1-preview'
 
 
 def copy_tree(source,target):
@@ -90,7 +90,7 @@ def build_update(package):
     if archive.exists():raise ValueError('Update archive already exists')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
@@ -98,7 +98,10 @@ def build_update(package):
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
 
-本次更新：缩短导航等待；补上无确认按钮的Rank升级页；后台切屏短暂黑帧自动重取，不重复点击。
+本次修复地图误判：未检测到星级不算已通关，已有入场记录不再被当成应跳过的已完成关。
+每一行都检测锁定，不能再点击带锁的下一关；绿色像素改为通关徽章形状+节点绿环联合证据。
+识别有明确通关星级标签的0～3星文本作为补充；信用等级、英雄稀有度、章节星数不参与关卡完成判定。
+保留v1.3的导航提速、无确认按钮Rank升级页、后台短暂黑帧重取，不重复点击。
 装备/神器/英雄容量等提示进入“等待处理”，处理后可继续，不判为战败、不自动卖物品或扩容。
 停止后可再次开始；不回看旧关、不要求补记；旧入场与失败证据保留，不重复入场。
 PC只保留后台窗口消息，旧前台设置自动迁移；整场后台/跨机器兼容仍为实验性，不支持最小化。

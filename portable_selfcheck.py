@@ -8,7 +8,7 @@ def worker_check():
     import cv2,numpy
     from rapidocr_onnxruntime import RapidOCR
     from abyss_templates import TemplateBank
-    import task_blockers,task_overlays,task_timing,windows_elevation
+    import task_blockers,task_overlays,task_timing,mainline_map,windows_elevation
     from pc_message_backend import CaptureUnavailable
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(ROOT/'assets'/'abyss')

@@ -58,10 +58,11 @@ class CurrentScreenTests(unittest.TestCase):
         r=fake_runner();r.start_current_screen();r.map_ticket=Mock(return_value=(dict(key='E3-C5-S8',episode=3,chapter=5,stage=8,name='new',verified_epoch=time.time()),[], '未通关蓝色当前节点'))
         with patch('runner.classify',return_value='map'),patch('runner.event'),patch.object(runner,'ROOT',Path('not-existing-test-root')):keep,_=r.step(frame([]))
         self.assertTrue(keep);r.action.assert_called_once();self.assertEqual(r.s['completed'],{})
-    def test_attempted_current_node_selects_new_without_replaying(self):
-        r=fake_runner();r.start_current_screen();r.map_ticket=Mock(return_value=(dict(key='E3-C3-S10',episode=3,chapter=3,stage=10),[dict(stage=11,green=0,x=320,y=350)],'未通关蓝色当前节点'))
-        with patch('runner.classify',return_value='map'),patch('runner.event'),patch.object(runner,'ROOT',Path('not-existing-test-root')):keep,_=r.step(frame([]))
-        self.assertTrue(keep);self.assertIn('下一新关',r.action.call_args.args[0]);self.assertIsNone(r.ticket)
+    def test_attempted_current_node_is_not_mistaken_for_completed(self):
+        r=fake_runner();r.start_current_screen();r.map_ticket=Mock(return_value=(dict(key='E3-C3-S10',episode=3,chapter=3,stage=10),[dict(stage=11,green=0,x=320,y=350,lock_score=.95,locked=True)],'未通关蓝色当前节点'))
+        with patch('runner.classify',return_value='map'),patch('runner.event'),patch.object(runner,'ROOT',Path('not-existing-test-root')):
+            with self.assertRaises(TaskAttention) as caught:r.step(frame([]))
+        self.assertEqual(caught.exception.code,'current_stage_unresolved');r.action.assert_not_called();self.assertIsNone(r.ticket)
     def test_current_policy_admits_stopped_history_without_writing(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);state=fake_runner().s;atomic_json(root/'state.json',state);(root/'STOP').write_text('user stop')
