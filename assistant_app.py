@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse,ctypes,json,os,queue,subprocess,sys,threading,time,uuid
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image,ImageTk
 from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,validate_run,window_layout
+from assistant_status import activity
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','PC 桌面端':'pc'}
 TASKS={'普通深渊':'abyss','主线推进':'mainline'}
@@ -14,6 +15,7 @@ INPUTS={'后台窗口消息 · 实验性':'messages','前台兼容模式':'foreg
 class Assistant:
     def __init__(self,root,ui_check=False):
         self.root=root;self.ui_check=ui_check;self.settings=load_settings();self.targets=[];self.filtered=[]
+        self.scanning=False;self.last_badge=None;self.status=tk.StringVar(value='尚未启动。检测到客户端后可选择观察或推进。')
         self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False
         root.title('第七史诗 · 统一推进助手');root.configure(bg=BG)
         from ctypes import wintypes
@@ -30,6 +32,18 @@ class Assistant:
         style.configure('TCheckbutton',background=CARD,foreground=INK,font=('Microsoft YaHei UI',9))
         style.configure('Footer.TCheckbutton',background=BG,foreground=INK,font=('Microsoft YaHei UI',9))
         style.configure('TSpinbox',padding=4,font=('Microsoft YaHei UI',10))
+        style.configure('Activity.Horizontal.TProgressbar',background=GREEN,troughcolor='#e5eee8',bordercolor='#e5eee8',lightcolor=GREEN,darkcolor=GREEN,thickness=5)
+        self.activity_panel=tk.Frame(root,bg=CARD,highlightbackground=LINE,highlightthickness=1)
+        self.activity_panel.pack(side='top',fill='x',padx=20,pady=(12,0))
+        self.activity_title=tk.Label(self.activity_panel,text='未启动 · 当前没有任务在运行',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',14,'bold'),anchor='w')
+        self.activity_title.pack(fill='x',padx=12,pady=(9,2))
+        self.activity_meta=tk.Label(self.activity_panel,text='任务未启动；点击开始后这里会明确显示状态。',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9),anchor='w')
+        self.activity_meta.pack(fill='x',padx=12,pady=(0,5))
+        self.activity_detail=tk.Label(self.activity_panel,text='',bg=CARD,fg=INK,font=('Microsoft YaHei UI',9),anchor='nw',justify='left',height=2,wraplength=550)
+        self.activity_detail.pack(fill='x',padx=12,pady=(0,5))
+        self.activity_detail.bind('<Configure>',lambda e:self.activity_detail.configure(wraplength=max(120,e.width)))
+        self.activity_progress=ttk.Progressbar(self.activity_panel,mode='indeterminate',length=120,style='Activity.Horizontal.TProgressbar')
+        self.activity_progress.pack(fill='x',padx=12,pady=(0,9))
         self.footer=tk.Frame(root,bg=BG);self.footer.pack(side='bottom',fill='x',padx=20,pady=(8,14))
         viewport=tk.Frame(root,bg=BG);viewport.pack(side='top',fill='both',expand=True)
         self.body_canvas=tk.Canvas(viewport,bg=BG,highlightthickness=0,borderwidth=0)
@@ -53,6 +67,11 @@ class Assistant:
         self.instance=tk.StringVar(value='正在检测客户端…')
         self.client_box=self.combo(connection,'客户端',self.client,list(CLIENTS),0)
         self.refresh_button=self.button(connection,'刷新',self.scan,'#e8f0eb',INK);self.refresh_button.grid(row=0,column=2,padx=(8,0))
+        from assistant_portable import enabled
+        self.import_button=None
+        if enabled():
+            self.import_button=self.button(connection,'使用原进度…',self.import_profile,'#e8f0eb',INK)
+            self.import_button.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(7,0))
         self.target_box=self.combo(connection,'绑定实例',self.instance,[],1,columnspan=2)
         self.task_box=self.combo(connection,'推进任务',self.task,list(TASKS),2,columnspan=2)
         self.input_box=self.combo(connection,'桌面输入',self.input,list(INPUTS),3,columnspan=2)
@@ -61,7 +80,7 @@ class Assistant:
         self.task_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
         self.input_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
         status_card=self.card(outer)
-        self.status=tk.StringVar(value='就绪 · 请选择客户端与推进任务')
+        tk.Label(status_card,text='当前步骤 / 需要处理的原因',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(anchor='w',pady=(0,4))
         tk.Label(status_card,textvariable=self.status,bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'),wraplength=550,justify='left').pack(anchor='w')
         stats=tk.Frame(status_card,bg=CARD);stats.pack(fill='x',pady=(9,0))
         self.scene=tk.StringVar(value='—');self.wins=tk.StringVar(value='0');self.elapsed=tk.StringVar(value='00:00')
@@ -91,7 +110,7 @@ class Assistant:
         tk.Label(outer,textvariable=self.note,bg=BG,fg='#86602c',font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
         self.logs=tk.Text(outer,height=3,bg='#e9efeb',fg=MUTED,font=('Microsoft YaHei UI',9),relief='flat',padx=9,pady=7,wrap='word',state='disabled')
         self.logs.pack(fill='both',expand=True)
-        self.update_note();self.update_buttons()
+        self.update_note();self.update_buttons();self.update_activity()
         if not ui_check:root.after(300,self.scan);root.after(200,self.pump)
 
     def card(self,parent):
@@ -111,6 +130,19 @@ class Assistant:
         rows=[t for t in self.filtered if t['label']==self.instance.get()]
         if len(rows)!=1:raise ValueError('请选择具体客户端/实例；多个目标不会自动切换。')
         return rows[0]
+    def import_profile(self):
+        if self.process and self.process.poll() is None:return
+        folder=filedialog.askdirectory(parent=self.root,title='选择自己的原进度目录（含 state.json）；不会清空或复制')
+        if not folder:return
+        try:
+            from assistant_portable import register_existing,save_settings
+            root,state=register_existing(folder)
+            self.settings.update(data_dir=str(root),portable_first_use=False)
+            cfg=read_json(root/'config.json',{})
+            self.settings['mumu'].update({k:cfg[k] for k in ('adb','serial','package') if k in cfg})
+            save_settings(self.settings);self.mode='idle'
+            self.status.set('已关联原进度 '+str(len(state['completed']))+' 关；任务未启动，原记录未修改。');self.update_note();self.update_buttons();self.scan()
+        except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.update_buttons()
     def current_settings(self):
         value=dict(self.settings)
         value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input=INPUTS[self.input.get()],limit=int(self.limit.get()),observe=self.observe.get())
@@ -131,21 +163,52 @@ class Assistant:
             if TASKS[self.task.get()]=='abyss':text+=' MuMu深渊尚未实机验收，无法确认界面时停止。'
         elif INPUTS[self.input.get()]=='messages':text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
         else:text='PC前台兼容：需保持游戏前台、无遮挡；不会自动抢焦点。'
-        if TASKS[self.task.get()]=='mainline':
+        if not self.settings.get('data_dir'):
+            text+=' 首次使用：观察不建进度；推进前核对当前账号，已有记录先关联。'
+        elif TASKS[self.task.get()]=='mainline':
             try:
                 state=read_json(Path(self.settings.get('data_dir',''))/'state.json',{})
                 text+=' 原主线记录 '+str(len(state.get('completed',{})))+' 关；'
                 if state.get('terminal') or state.get('active'):text+='开始时先自动核对原关是否手动通关；未核实不重试、不清空历史。'
             except Exception:text+='原主线记录需要检查，禁止空记录替代。'
         self.note.set(text)
-    def update_buttons(self):self.start_button.configure(text='继续运行' if self.mode=='paused' else ('开始观察' if self.observe.get() else '开始推进'))
+    def update_buttons(self):
+        alive=bool(self.process and self.process.poll() is None)
+        label='继续观察' if self.mode=='paused' and self.observe.get() else ('继续推进' if self.mode=='paused' else ('开始观察' if self.observe.get() else '开始推进'))
+        if alive and self.mode!='paused':label={'starting':'检查中…','checking':'检查中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.observe.get() else '推进中…'}.get(self.mode,'等待进程退出…')
+        if self.scanning:label='检测客户端中…'
+        self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode!='paused') else 'normal')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking') else 'disabled')
+        self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
+        self.update_activity()
+    def update_activity(self):
+        alive=bool(self.process and self.process.poll() is None)
+        view=activity('scanning' if self.scanning else self.mode,TASKS.get(self.task.get(),'mainline'),self.observe.get(),alive)
+        self.activity_title.configure(text=view.title,fg=view.color)
+        self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode=='blocked' else INK)
+        self.root.title(view.title.split(' · ')[0]+' | 第七史诗 · 统一推进助手')
+        if view!=self.last_badge:
+            self.activity_progress.stop()
+            self.activity_progress.configure(mode='indeterminate' if view.moving else 'determinate')
+            if view.moving:self.activity_progress.start(16)
+            else:self.activity_progress.configure(value=0)
+            self.last_badge=view
+        if alive:
+            age=int(time.monotonic()-self.last_heartbeat)
+            text=('工作进程已确认暂停' if self.mode=='paused' else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
+            if age>15 and self.mode!='paused':text+='  · 仍在等待响应，不代表已卡死'
+        else:text='任务没有运行。点击开始才会启动；说明文字不代表任务已开始。'
+        self.activity_meta.configure(text=text)
+
     def lock_choices(self,locked):
         for widget in (self.client_box,self.target_box,self.task_box,self.input_box):widget.configure(state='disabled' if locked else 'readonly')
         self.limit_box.configure(state='disabled' if locked else 'normal');self.refresh_button.configure(state='disabled' if locked else 'normal')
         self.observe_box.configure(state='disabled' if locked else 'normal');self.confirm_box.configure(state='disabled' if locked else 'normal')
+        if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def scan(self):
-        if self.process and self.process.poll() is None:return
-        self.status.set('正在检测本机客户端…');HOME.mkdir(parents=True,exist_ok=True)
+        if self.scanning or (self.process and self.process.poll() is None):return
+        self.scanning=True;self.update_buttons();self.refresh_button.configure(state='disabled')
+        self.status.set('正在检测本机客户端，任务尚未启动…');HOME.mkdir(parents=True,exist_ok=True)
         settings_path=HOME/'discovery-settings.json';atomic_json(settings_path,self.settings)
         def work():
             try:
@@ -153,12 +216,12 @@ class Assistant:
                 if not Path(py).is_file():raise ValueError('未找到已有工作运行库；没有自动下载或新建进度。')
                 r=subprocess.run([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--discover',str(settings_path)],capture_output=True,text=True,encoding='utf-8',timeout=25,creationflags=subprocess.CREATE_NO_WINDOW)
                 if r.returncode:raise ValueError(r.stderr.strip()[-500:])
-                self.events.put(('targets',json.loads(r.stdout)['targets']))
-            except Exception as exc:self.events.put(('error',str(exc)))
+                self.events.put(('targets',json.loads(r.stdout)))
+            except Exception as exc:self.events.put(('scan_error',str(exc)))
         threading.Thread(target=work,daemon=True).start()
     def start(self):
         if self.process and self.process.poll() is None:
-            if self.mode=='paused':self.command('run');self.mode='run';self.last_heartbeat=time.monotonic();self.update_buttons()
+            if self.mode=='paused':self.command('run');self.mode='starting';self.last_heartbeat=time.monotonic();self.update_buttons()
             else:self.status.set('当前任务仍在运行；先暂停或停止后再切换。')
             return
         try:
@@ -166,13 +229,24 @@ class Assistant:
             if not settings['observe'] and not self.confirm.get():raise ValueError('请先确认队伍、原生自动战斗，并允许运行所选模式。')
             py=settings.get('worker_python','')
             if not Path(py).is_file():raise ValueError('工作运行库不存在，停止启动。')
-            self.settings=settings;atomic_json(HOME/'settings.json',settings)
+            first_consent=False;bind_consent=False
+            from assistant_portable import enabled,save_settings
+            if enabled() and not settings['observe']:
+                if not settings.get('data_dir'):
+                    first_consent=messagebox.askyesno('首次使用 · 登记自己的进度','这是本目录第一次使用。\n\n如果这个账号已有旧脚本记录，请取消并点“使用原进度”。不能新建空记录绕过失败或已入场关卡。\n\n确认这是首次使用、没有需要关联的旧记录，并允许自动导航到账号页核对当前账号？\n核对成功后只建立本机记录，不上传。',parent=self.root)
+                    if not first_consent:return
+                else:
+                    state=read_json(Path(settings['data_dir'])/'state.json')
+                    if not state.get('pc_profile_binding'):
+                        bind_consent=messagebox.askyesno('首次关联旧进度','这份旧记录还没有账号绑定。\n确认它属于当前已登录账号，并允许自动核对账号后绑定？\n将备份并保留所有尝试、失败、通关和证据；不会换绑已有账号。',parent=self.root)
+                        if not bind_consent:return
+            self.settings=settings;save_settings(settings)
             self.run_id=uuid.uuid4().hex;self.run_dir=HOME/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
-            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target}
+            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'first_use_consent':first_consent,'bind_existing_consent':bind_consent}
             atomic_json(self.run_dir/'request.json',request);self.command('run')
             self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
             atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
-            self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接所选客户端…');self.preview_stamp=None
+            self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
             child=self.process
             def reader():
                 with (self.run_dir/'worker.log').open('a',encoding='utf-8') as log:
@@ -182,23 +256,35 @@ class Assistant:
                         except ValueError:self.events.put(('log',line.strip()))
                 self.events.put(('exit',child.pid))
             threading.Thread(target=reader,daemon=True).start()
-        except Exception as exc:self.status.set(str(exc));self.log(str(exc))
+        except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.log(str(exc));self.update_buttons()
     def command(self,action):
         if self.run_dir:atomic_json(self.run_dir/'control.json',{'run_id':self.run_id,'action':action})
     def pause(self):
-        if self.process and self.process.poll() is None:self.command('pause');self.status.set('正在安全暂停；不清除本次上下文。')
+        if self.process and self.process.poll() is None:self.command('pause');self.mode='pausing';self.status.set('正在安全暂停；不清除本次上下文。');self.update_buttons()
     def stop(self):
-        if self.process and self.process.poll() is None:self.command('stop');self.status.set('正在停止输入，保留全部进度…')
+        if self.process and self.process.poll() is None:self.command('stop');self.mode='stopping';self.status.set('正在停止输入，保留全部进度…');self.update_buttons()
     def pump(self):
         try:
             for _ in range(50):
                 kind,data=self.events.get_nowait()
-                if kind=='targets':self.targets=data;self.filter_targets();self.status.set('已发现 '+str(len(data))+' 个可绑定客户端；'+('仅观察不会点击。' if self.observe.get() else '尚未启动任务。'))
+                if kind=='targets':
+                    self.scanning=False;self.refresh_button.configure(state='normal');self.targets=data['targets'];self.settings['mumu']=data.get('mumu',self.settings.get('mumu',{}));self.filter_targets()
+                    self.mode='idle';self.status.set('已发现 '+str(len(self.targets))+' 个客户端。任务尚未启动。');self.update_buttons()
+                elif kind=='scan_error':
+                    self.scanning=False;self.refresh_button.configure(state='normal');self.mode='blocked';self.status.set(data);self.log(data);self.update_buttons()
                 elif kind in ('error','log'):self.log(data);self.status.set(data) if kind=='error' else None
                 elif kind=='worker':
-                    if data.get('kind')=='status':
+                    if data.get('kind')=='profile':
                         if data.get('run_id')!=self.run_id:continue
-                        self.mode=data['mode'];self.status.set(data['status']);self.scene.set(data.get('scene','—'));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
+                        self.settings.update(data_dir=data['data_dir'],portable_first_use=False)
+                        from assistant_portable import save_settings
+                        save_settings(self.settings);self.update_note()
+                    elif data.get('kind')=='status':
+                        if data.get('run_id')!=self.run_id:continue
+                        incoming=data['mode']
+                        if self.mode=='stopping' and incoming not in ('stopped','done','blocked'):continue
+                        if self.mode=='pausing' and incoming not in ('paused','stopped','done','blocked'):continue
+                        self.mode=incoming;self.status.set(data['status']);self.scene.set(data.get('scene','—'));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
                     elif data.get('kind')=='log':self.log(data['text'])
                 elif kind=='exit' and self.process and data==self.process.pid:
                     self.lock_choices(False)
@@ -208,7 +294,8 @@ class Assistant:
         if self.started and self.process and self.process.poll() is None:
             seconds=int(time.monotonic()-self.started);self.elapsed.set(f'{seconds//60:02d}:{seconds%60:02d}')
             if self.mode!='paused' and time.monotonic()-self.last_heartbeat>65:
-                self.command('stop');self.process.terminate();self.status.set('工作进程超过65秒无响应，已停止自己的进程；不重启游戏。');self.mode='blocked'
+                self.command('stop');self.process.terminate();self.status.set('工作进程超过65秒无响应，已停止自己的进程；不重启游戏。');self.mode='blocked';self.update_buttons()
+        self.update_activity()
         if self.run_dir:
             path=self.run_dir/'preview.png'
             try:

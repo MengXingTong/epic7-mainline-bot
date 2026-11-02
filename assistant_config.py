@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os, sys
 from pathlib import Path
 CODE_ROOT=Path(__file__).resolve().parent
-HOME=CODE_ROOT/'.local'/'assistant'
+HOME=Path(os.environ.get('EPIC7_ASSISTANT_HOME',str(CODE_ROOT/'.local'/'assistant'))).resolve()
 
 
 def read_json(path,default=None):
@@ -23,6 +23,20 @@ def atomic_json(path,value):
 
 def load_settings(home=HOME):
     saved=read_json(Path(home)/'settings.json')
+    from assistant_portable import enabled,registered_root
+    if enabled():
+        result={'client':'auto','task':'mainline','pc_input':'messages','limit':3,'observe':True,'data_dir':'','mumu':{}}
+        if saved is not None:result.update(saved)
+        root=registered_root(home)
+        if root:result['data_dir']=str(root)
+        elif result.get('data_dir'):
+            root=Path(result['data_dir'])
+            if not root.is_absolute():root=CODE_ROOT/root
+            if not (root/'state.json').is_file():raise ValueError('原进度丢失；不初始化替代。')
+            result['data_dir']=str(root.resolve())
+        result['portable_first_use']=not bool(result.get('data_dir'))
+        result['worker_python']=str(CODE_ROOT/'runtime'/'python.exe')
+        return result
     if saved is not None:return saved
     prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{})
     root=prefs.get('data_dir','')
@@ -65,6 +79,9 @@ def validate_run(settings,target,allow_reconcile=False):
     if not 1<=int(settings.get('limit',0))<=30:raise ValueError('本次上限须为1～30。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
     if target['client']=='pc' and settings.get('pc_input') not in ('messages','foreground'):raise ValueError('Invalid PC input mode')
+    from assistant_portable import enabled,registered_root
+    if enabled() and not settings.get('data_dir') and registered_root() is None:
+        return HOME/'observations',{'attempted':{},'completed':{}}
     root,state=history_gate(settings)
     if settings['task']=='mainline' and not settings.get('observe',False):
         from mainline_reconcile import pending_reconciliation

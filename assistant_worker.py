@@ -30,9 +30,10 @@ class Control:
         end=time.monotonic()+seconds
         while time.monotonic()<end:self.check();time.sleep(min(.2,max(0,end-time.monotonic())))
     def paused(self):
+        resume_mode=self.last.get('mode','starting')
         self.status('已暂停；继续时重新截图，不重用旧坐标。',mode='paused')
         while True:
-            try:self.check();self.status('继续运行',mode='run');return
+            try:self.check();self.status('已恢复，正在刷新当前状态。',mode=resume_mode);return
             except PauseRun:time.sleep(.2)
 
 class GuardedApi:
@@ -54,13 +55,26 @@ def discover(settings):
     for title in ('第七史诗','第七史詩','Epic Seven'):
         for s in api.windows('',title):
             targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · PID {s.pid} · {s.width}×{s.height}'))
-    cfg=settings.get('mumu',{});adb=Path(cfg.get('adb',''))
-    if adb.is_file():
-        out=subprocess.run([str(adb),'devices'],capture_output=True,timeout=12,creationflags=subprocess.CREATE_NO_WINDOW)
-        for line in out.stdout.decode('utf-8',errors='replace').splitlines()[1:]:
-            parts=line.split()
-            if len(parts)<2 or parts[1]!='device' or parts[0]!=cfg.get('serial'):continue
-            targets.append(dict(client='mumu',serial=parts[0],package=cfg.get('package','com.stove.epic7.google'),label='MuMu · '+parts[0]+' · ADB后台'))
+    from launcher import find_adb
+    cfg=settings.setdefault('mumu',{})
+    adb=find_adb(cfg.get('adb',''))
+    if adb:
+        cfg['adb']=str(adb)
+        def devices():
+            out=subprocess.run([str(adb),'devices'],capture_output=True,timeout=8,creationflags=subprocess.CREATE_NO_WINDOW)
+            return [p[0] for line in out.stdout.decode('utf-8',errors='replace').splitlines()[1:] if len(p:=line.split())>=2 and p[1]=='device']
+        serials=devices()
+        if not serials:
+            # Local MuMu default only; no network/port scan or arbitrary remote ADB.
+            serial=cfg.get('serial') or '127.0.0.1:16384'
+            subprocess.run([str(adb),'connect',serial],capture_output=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW)
+            serials=devices()
+        for serial in serials:
+            if cfg.get('serial') and serial!=cfg['serial']:continue
+            package=cfg.get('package','com.stove.epic7.google')
+            out=subprocess.run([str(adb),'-s',serial,'shell','pm','path',package],capture_output=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW)
+            if out.returncode or not out.stdout.strip().startswith(b'package:'):continue
+            targets.append(dict(client='mumu',serial=serial,package=package,label='MuMu · '+serial+' · ADB后台'))
     return targets
 
 
@@ -73,13 +87,18 @@ def abyss_run(request,control):
     settings,target=request['settings'],request['target']
     transport=UnifiedTransport(settings,target,control.check)
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
-    bank=TemplateBank(CODE_ROOT/'.local/assistant/abyss-assets')
+    bank=TemplateBank(CODE_ROOT/'assets/abyss' if (CODE_ROOT/'portable.json').exists() else CODE_ROOT/'.local/assistant/abyss-assets')
     if not bank.entries and not settings['observe']:raise RuntimeError('缺少本机深渊识别模板，已停止；不会盲点或下载素材。')
     session=Session(limit=int(settings['limit']))
     history_path=Path(request['home'])/'abyss-history.json'
     history=read_json(history_path,{'schema':1,'clients':{}})
     label=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
-    key=hashlib.sha256((target['client']+'|'+label).encode()).hexdigest()[:24]
+    from assistant_portable import enabled
+    if enabled():
+        _,state=validate_run(settings,target,allow_reconcile=True)
+        binding=state.get('pc_profile_binding',{})
+        if binding:label='account|'+binding['server']+'|'+binding['account_id']
+    key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
     previous=None;stable=0;cooldown=0;unknown=None
     while True:
@@ -151,6 +170,8 @@ def mainline_run(request,control):
         cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,server=binding.get('server',''),account_id=binding.get('account_id','')))
     config_file=Path(request['run_dir'])/'runtime-config.json';atomic_json(config_file,cfg)
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
+    import runner
+    runner.ROOT=root
     from runner import Runner,classify
     class ControlledRunner(Runner):
         def ensure_game(self):control.check();return super().ensure_game()
@@ -163,7 +184,8 @@ def mainline_run(request,control):
             api=MessageWin32Api()
         else:api=Win32Api()
         api=GuardedApi(api,control)
-        if settings['observe']:r.pc=PcBackend(cfg['pc'],root/'STOP',api=api,read_only=True)
+        if request.get('_startup_backend'):r.pc=request['_startup_backend']
+        elif settings['observe']:r.pc=PcBackend(cfg['pc'],root/'STOP',api=api,read_only=True)
         else:
             if not cfg['pc']['server'] or not cfg['pc']['account_id']:raise RuntimeError('原主线记录尚无可核实的桌面账号绑定；保留历史，拒绝空记录启动。')
             from pc_quickstart import inspect_account,capture_frame,return_to_game,same_account
@@ -173,13 +195,13 @@ def mainline_run(request,control):
             if (current.hwnd,current.pid,current.created)!=(target['hwnd'],target['pid'],target['created']):raise RuntimeError('所选桌面实例已变化，未切换目标。')
             ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
             capture=lambda:capture_frame(backend,ocr,Path(request['run_dir'])/'preflight')
-            control.status('自动核对当前已登录账号；不切服、不处理认证。',mode='run')
+            control.status('自动核对当前已登录账号；不切服、不处理认证。',mode='checking')
             proof,_=inspect_account(backend,capture)
             if not same_account(proof,state['pc_profile_binding']):raise RuntimeError('当前账号与原主线历史不一致，未换绑。')
             backend.authorize(proof);return_to_game(backend,capture);r.pc=backend
             from mainline_reconcile import pending_reconciliation,reconcile_live
             if pending_reconciliation(r.s):
-                control.status('正在自动核对原失败关的手动通关标记；不重打旧关。',mode='run')
+                control.status('正在自动核对原失败关的手动通关标记；不重打旧关。',mode='checking')
                 def final_guard():
                     backend.ensure()
                     if backend.window.identity()!=proof['window']:raise RuntimeError('核对窗口与账号证据不一致。')
@@ -191,7 +213,7 @@ def mainline_run(request,control):
             from pc_quickstart import inspect_account,capture_frame,return_to_game
             backend=AdbNavigationBackend(settings,target,control.check)
             capture=lambda:capture_frame(backend,r.ocr,Path(request['run_dir'])/'preflight')
-            control.status('正在核对MuMu当前账号及原关通关标记，不重打。',mode='run')
+            control.status('正在核对MuMu当前账号及原关通关标记，不重打。',mode='checking')
             proof,_=inspect_account(backend,capture);match_account(r.s,proof)
             backend.authorize(proof);return_to_game(backend,capture)
             r.s=reconcile_live(root,r.s,proof,capture,backend.tap,backend.ensure,private_dir=Path(request['run_dir']),log=control.log)
@@ -221,15 +243,98 @@ def mainline_run(request,control):
         except PauseRun:control.paused()
 
 
+def observe_mainline(request,control):
+    """Read-only first use works without creating a mainline history."""
+    from assistant_transport import UnifiedTransport
+    from rapidocr_onnxruntime import RapidOCR
+    from runner import Frame,classify
+    import numpy as np,cv2
+    transport=UnifiedTransport(request['settings'],request['target'],control.check)
+    ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
+    while True:
+        try:
+            control.check();snap=transport.capture();raw=np.array(snap.image)[:,:,::-1].copy()
+            raw=cv2.resize(raw,(1600,900));results,_=ocr(raw)
+            control.preview(snap.image)
+            control.status('只读观察，不发送输入、不创建或修改通关记录。',mode='observe',scene=classify(Frame(raw,results)))
+            if request.get('once'):return
+            control.sleep(2)
+        except PauseRun:control.paused()
+
+
+def prepare_portable_profile(request,control):
+    """Explicit consent + live account navigation only; no stage entry here."""
+    from assistant_portable import registered_root,initialize_verified,relative_or_absolute
+    from assistant_config import HOME,history_gate
+    from runtime_paths import exclusive_profile
+    from pc_quickstart import inspect_account,capture_frame,return_to_game
+    from mainline_reconcile import match_account
+    from rapidocr_onnxruntime import RapidOCR
+    settings,target=request['settings'],request['target']
+    with exclusive_profile(HOME):
+        initial=not settings.get('data_dir')
+        if initial:
+            if registered_root() is not None:raise RuntimeError('已发现本机登记；重新打开软件读取旧进度。')
+            if not request.get('first_use_consent'):raise RuntimeError('没有首次使用确认；未初始化。')
+            state={};stop_path=HOME/'STOP'
+        else:
+            root,state=history_gate(settings);stop_path=root/'STOP'
+            if stop_path.exists():raise RuntimeError('原进度存在STOP停止标记；保留标记，不自动继续。')
+            if not state.get('pc_profile_binding') and not request.get('bind_existing_consent'):
+                raise RuntimeError('旧历史未绑定；需要明确确认其属于当前账号。')
+        if target['client']=='pc':
+            from pc_backend import PcBackend,Win32Api
+            from pc_message_backend import MessageWin32Api
+            api=MessageWin32Api() if settings['pc_input']=='messages' else Win32Api()
+            cfg=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,server='',account_id='')
+            backend=PcBackend(cfg,stop_path,api=GuardedApi(api,control))
+            current=backend.snapshot()
+            if (current.hwnd,current.pid,current.created)!=(target['hwnd'],target['pid'],target['created']):raise RuntimeError('所选桌面目标已改变。')
+        else:
+            from assistant_transport import AdbNavigationBackend
+            backend=AdbNavigationBackend(settings,target,control.check)
+        ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
+        capture=lambda:capture_frame(backend,ocr,Path(request['run_dir'])/'account-check')
+        control.status('正在双帧核对当前账号；只进行已识别的账号菜单导航，尚未进入关卡。',mode='checking')
+        proof,_=inspect_account(backend,capture)
+        if not initial:match_account(state,proof,allow_initial=bool(request.get('bind_existing_consent')),expected_server=proof['server'])
+        if target['client']=='pc':backend.cfg.update(server=proof['server'],account_id=proof['account_id'])
+        backend.authorize(proof);return_to_game(backend,capture);control.check()
+        if initial:
+            root,state=initialize_verified(proof,request.get('first_use_consent'))
+        else:
+            with exclusive_profile(root):
+                if read_json(root/'state.json')!=state:raise RuntimeError('账号核对期间原进度变化；未写入。')
+                if not state.get('pc_profile_binding'):
+                    backup=root/('state.json.before-portable-binding-'+request['run_id'])
+                    with backup.open('xb') as f:f.write((root/'state.json').read_bytes())
+                    state['pc_profile_binding']={'server':proof['server'],'account_id':proof['account_id'],'bound_at':time.time(),'source':'explicit_import_consent'}
+                    atomic_json(root/'state.json',state)
+        settings.update(data_dir=str(root),portable_first_use=False)
+        if target['client']=='pc':backend.stop_path=root/'STOP';request['_startup_backend']=backend
+        print(json.dumps({'kind':'profile','run_id':request['run_id'],'data_dir':str(root)},ensure_ascii=False),flush=True)
+        return root
+
+
 def run_request(request):
     control=Control(request)
     try:
         root,_=validate_run(request['settings'],request['target'],allow_reconcile=True)
         from runtime_paths import exclusive_profile
+        from assistant_portable import enabled
+        if request['settings']['observe']:
+            # Independent observer never authorizes account navigation or writes state.
+            root.mkdir(parents=True,exist_ok=True)
+        elif enabled():
+            while True:
+                try:root=prepare_portable_profile(request,control);break
+                except PauseRun:control.paused()
+            validate_run(request['settings'],request['target'],allow_reconcile=True)
         with exclusive_profile(root):
             while True:
                 try:
                     if request['settings']['task']=='abyss':abyss_run(request,control)
+                    elif request['settings']['observe']:observe_mainline(request,control)
                     else:mainline_run(request,control)
                     break
                 except PauseRun:control.paused()
@@ -245,7 +350,8 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('--request',type=Path);ap.add_argument('--discover',type=Path)
     args=ap.parse_args()
     if args.discover:
-        print(json.dumps({'targets':discover(read_json(args.discover))},ensure_ascii=False));return
+        settings=read_json(args.discover);targets=discover(settings)
+        print(json.dumps({'targets':targets,'mumu':settings.get('mumu',{})},ensure_ascii=False));return
     if not args.request:raise RuntimeError('A private request file is required')
     run_request(read_json(args.request))
 
