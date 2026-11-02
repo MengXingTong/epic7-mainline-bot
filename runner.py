@@ -9,7 +9,7 @@ sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash
+from task_overlays import rankup_splash,account_upgrade_notice_close
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 import copy
 ROOT = data_root()
@@ -121,6 +121,7 @@ def classify(f):
     if resource_warning(f): return 'resource_stop'
     if (f.any('网络连接异常') and f.any('重新连接') or f.any('与服务器的连接已中断')) and f.find('点击重试',(500,550,1100,780)): return 'network_error'
     if paid_revive_defeat_verified(f): return 'defeat'
+    if account_upgrade_notice_close(f.words):return 'account_upgrade_notice'
     if rankup_splash(f.words):return 'rankup_splash'
     conf=f.find(r'^(确认|确定|確定|確認)$')
     cancel=f.find(r'^(取消|취소)$')
@@ -330,6 +331,8 @@ class Runner:
             if self.s.get('active') and not self.s['active'].get('victory_seen'):
                 self.s['active']['victory_seen']=True; self.s['active']['victory_evidence']=self.evidence('victory-'+self.s['active']['key'])
             self.action('通关星级页继续至结算',xy=(1550,845)); return True,3
+        if mode=='account_upgrade_notice':
+            self.action('关闭免费账号升级行动力上限提示',account_upgrade_notice_close(f.words));return True,3
         if mode=='rankup_splash':
             self.action('关闭免费Rank升级全屏提示',xy=(800,872));return True,3
         if mode=='rankup':

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re, time, unicodedata
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash
+from task_overlays import rankup_splash,account_upgrade_notice_close
 
 
 def normalize(text):
@@ -101,6 +101,7 @@ class Scene(str,Enum):
     RESULT="结算过场"
     DEFEAT="战斗失败"
     HARD="挑战模式（禁止）"
+    ACCOUNT_UPGRADE="账号升级行动力上限提示"
     RANKUP="Rank升级提示"
     CAPACITY="容量不足（等待处理）"
     BLOCKED="需要人工处理"
@@ -121,9 +122,15 @@ BLOCKED_PHRASES=("体力不足","购买体力","购买入场券","入场券不�
                  "连接失败","网络连接中断","错误代码","服务器维护","重新连接")
 
 
+def _account_upgrade_target(o):
+    words=[dict(text=t.text,x=t.center[0],y=t.center[1],score=t.score if t.score is not None else 1.0,token=t) for t in o.tokens]
+    target=account_upgrade_notice_close(words,o.width,o.height)
+    return target['token'] if target else None
+
 def classify(o,normal_verified=False):
     blocker=capacity_blocker(t.text for t in o.tokens)
     if blocker:return Reading(Scene.CAPACITY,(blocker.title,blocker.reason))
+    if _account_upgrade_target(o) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.ACCOUNT_UPGRADE,('升级','账号升等、行动力上限已提升','点击关闭'))
     if rankup_splash([dict(text=t.text,x=t.center[0],y=t.center[1]) for t in o.tokens],o.width,o.height) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.RANKUP,('RANK UP','免费Rank提升与已恢复行动力','继续旅程'))
     if o.contains(*BLOCKED_PHRASES) or o.has("确认","确定","取消","购买","复活"):
         return Reading(Scene.BLOCKED,("资源/付费/确认弹窗",))
@@ -183,6 +190,8 @@ class Session:
 
     def plan(self,reading,o):
         scene=reading.scene
+        if scene==Scene.ACCOUNT_UPGRADE:
+            return self._action("关闭免费账号升级行动力上限提示",_account_upgrade_target(o),"account-upgrade-close",scene)
         if scene==Scene.RANKUP:
             return self._action("关闭免费Rank升级提示",Token("继续",o.width*.49,o.height*.96,o.width*.02,o.height*.02),"rankup-continue",scene)
         if scene in (Scene.CAPACITY,Scene.BLOCKED):
