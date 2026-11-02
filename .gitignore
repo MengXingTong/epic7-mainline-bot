@@ -1,0 +1,37 @@
+# Account data, evidence and local configuration must never be published.
+config.json
+config.*.local.json
+state.json
+state.json.*
+STOP
+STATUS.md
+NIGHT_REPORT.md
+FINAL_SCREENSHOT.png
+latest.png
+latest-ocr.json
+events.jsonl
+*.log
+*.pid
+*.lock
+evidence/
+.local/
+private/
+tests/fixtures/
+# Downloaded runtimes, models, artifacts and caches
+python/
+vendor/
+.venv/
+__pycache__/
+*.py[cod]
+*.zip
+*.7z
+*.exe
+*.dll
+*.onnx
+*.dmp
+build/
+dist/
+.env
+.env.*
+*.pem
+*.key

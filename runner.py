@@ -1,0 +1,389 @@
+"""MuMu Epic Seven story runner. Android-local ADB only; never spends refill resources.
+Every paid entry requires a fresh, positively verified uncleared map node.
+"""
+from __future__ import annotations
+import argparse, datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / 'vendor'))
+for _stream in (sys.stdout,sys.stderr):
+    if hasattr(_stream,'reconfigure'): _stream.reconfigure(encoding='utf-8',errors='replace')
+import cv2
+import numpy as np
+from rapidocr_onnxruntime import RapidOCR
+TZ = dt.timezone(dt.timedelta(hours=8))
+def now(): return dt.datetime.now(TZ).isoformat(timespec='seconds')
+def norm(s): return re.sub(r'[\s，。！？：:,.!?·…+－_—\-|ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIl]+', '', s).lower()
+def atomic_json(path, value):
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, path)
+def event(kind, **kwargs):
+    with (ROOT/'events.jsonl').open('a', encoding='utf8') as f:
+        f.write(json.dumps(dict(time=now(),kind=kind,**kwargs),ensure_ascii=False)+'\n')
+class Frame:
+    def __init__(self, image, results, raw_size=None):
+        self.image=image; self.raw_size=raw_size or (1600,900); self.at=time.time()
+        self.words=[]
+        for box,text,score in results or []:
+            if score < .55: continue
+            self.words.append(dict(text=text, score=float(score), x=float(np.mean([p[0] for p in box])), y=float(np.mean([p[1] for p in box])), box=box))
+        self.text='\n'.join(w['text'] for w in self.words)
+        self.clean=norm(self.text)
+    def find(self, pattern, region=(0,0,1600,900), exact=False):
+        x1,y1,x2,y2=region
+        return next((w for w in self.words if x1<=w['x']<=x2 and y1<=w['y']<=y2 and (norm(w['text'])==norm(pattern) if exact else re.search(pattern,w['text'],re.I))),None)
+    def any(self,*terms): return any(norm(t) in self.clean for t in terms)
+
+def selected_node(f):
+    hsv=cv2.cvtColor(f.image,cv2.COLOR_BGR2HSV)
+    rows=[]
+    for w in f.words:
+        m=re.match(r'^\s*(\d{1,2})\s*[.．、。]\s*(.+)',w['text'])
+        if not m or not (100<=w['x']<=650 and 190<=w['y']<=730): continue
+        y=int(round(w['y'])); yy,xx=np.ogrid[:900,:1600]; rr=(xx-68)**2+(yy-y)**2
+        ring=(rr>=39**2)&(rr<=61**2)&(xx<130)
+        cyan=(hsv[:,:,0]>=80)&(hsv[:,:,0]<=112)&(hsv[:,:,1]>90)&(hsv[:,:,2]>125)
+        score=float(np.count_nonzero(cyan&ring)/max(1,np.count_nonzero(ring)))
+        patch=hsv[max(0,y+7):min(900,y+43),77:112]
+        green=int(np.count_nonzero((patch[:,:,0]>=32)&(patch[:,:,0]<=85)&(patch[:,:,1]>115)&(patch[:,:,2]>90)))
+        rows.append(dict(stage=int(m.group(1)),name=m.group(2),y=y,x=w['x'],cyan=round(score,4),green=green))
+    rows.sort(key=lambda x:x['cyan'],reverse=True)
+    if not rows or rows[0]['cyan']<.055: return None,rows
+    if len(rows)>1 and rows[0]['cyan']-rows[1]['cyan']<.025: return None,rows
+    chosen=rows[0]
+    # A grey padlock is an additional veto; blue selection alone is insufficient.
+    p=ROOT/'assets'/'lock.png'
+    if p.exists():
+        template=cv2.imdecode(np.frombuffer(p.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE)
+        y=chosen['y']; patch=cv2.cvtColor(f.image[max(0,y+4):min(900,y+48),68:119],cv2.COLOR_BGR2GRAY)
+        if patch.shape[0]>=template.shape[0] and patch.shape[1]>=template.shape[1]:
+            chosen['lock_score']=float(cv2.matchTemplate(patch,template,cv2.TM_CCOEFF_NORMED).max())
+    return chosen,rows
+
+def resource_warning(f):
+    center=''.join(w['text'] for w in f.words if 280<w['x']<1330 and 130<w['y']<750)
+    c=norm(center)
+    phrases=['体力不足','行动力不足','补充体力','体力补充','恢复体力','体力恢复','兑换体力','购买体力','补充行动力','行动力补充','恢复行动力','行动力恢复','购买行动力','兑换行动力']
+    if any(norm(x) in c for x in phrases): return True
+    resource=any(norm(x) in c for x in ['生命之叶','天空石','道具','钻石'])
+    use=any(norm(x) in c for x in ['是否消耗','是否使用','使用道具','消耗道具','购买','兑换','补充','不足'])
+    return resource and use
+
+def paid_revive_defeat_verified(f):
+    # A defeat can hide FAILED behind the growth guide. A priced blue-currency
+    # revive offer together with Leave/Replay is distinct from free Resume.
+    if not f.find(r'^继续战斗$',(1050,760,1230,890)): return False
+    if not f.find(r'^重新进行$',(1340,760,1599,890)): return False
+    if not f.find(r'^离开$',(80,760,245,899)): return False
+    price=f.find(r'^\d+$',(990,790,1060,865))
+    if not price or price['score']<.90: return False
+    hsv=cv2.cvtColor(f.image[790:860,945:990],cv2.COLOR_BGR2HSV)
+    gem=(hsv[:,:,0]>=85)&(hsv[:,:,0]<=130)&(hsv[:,:,1]>70)&(hsv[:,:,2]>90)
+    return int(np.count_nonzero(gem))>=100
+
+def victory_objectives_verified(f):
+    # Stylized CLEAR can be split/reordered by OCR. Require all three actual
+    # result-only mission panels plus the GREEN success check in the first one.
+    panels=((300,680,560,745),(720,680,1000,745),(1140,680,1450,745))
+    if not all(f.find('关卡任务',region) for region in panels): return False
+    if not f.find('闯关成功',(300,730,560,795)): return False
+    hsv=cv2.cvtColor(f.image[680:755,245:320],cv2.COLOR_BGR2HSV)
+    green=(hsv[:,:,0]>=32)&(hsv[:,:,0]<=85)&(hsv[:,:,1]>115)&(hsv[:,:,2]>100)
+    return int(np.count_nonzero(green))>=100
+
+def classify(f):
+    # Vetoes are ordered before EVERY action, including every kind of confirmation.
+    if resource_warning(f): return 'resource_stop'
+    if (f.any('网络连接异常') and f.any('重新连接') or f.any('与服务器的连接已中断')) and f.find('点击重试',(500,550,1100,780)): return 'network_error'
+    if paid_revive_defeat_verified(f): return 'defeat'
+    conf=f.find(r'^(确认|确定|確定|確認)$')
+    cancel=f.find(r'^(取消|취소)$')
+    middle=''.join(w['text'] for w in f.words if 260<w['x']<1360 and 140<w['y']<750)
+    failure_banner=norm(''.join(w['text'] for w in f.words if 280<w['x']<1340 and 120<w['y']<640))
+    if (any(norm(t) in failure_banner for t in ('FAILED','DEFEAT','战斗失败','挑战失败','闯关失败','任務失敗','任务失败'))
+        or (f.any('再次挑战','重新挑战','再挑战') and not f.any('获得的道具','任务成功','闯关成功'))): return 'defeat'
+    if f.any('给予协助的朋友') and f.any('发送好友申请') and f.find(r'^取消$',(500,570,800,720)) and f.find(r'^申请$',(800,570,1100,720)): return 'friend_decline'
+    if conf and ('跳过故事' in middle or '跳过剧情' in middle): return 'skip_confirm'
+    if conf and cancel: return 'unknown_dialog'
+    if f.any('故事完成奖励已正常发放','获得星星奖励已正常发放') and f.find('点击关闭',(500,500,1100,720)): return 'story_reward'
+    if f.any('支线故事通知') and f.any('已解锁') and f.any('支线故事一览') and f.find('点击关闭',(500,550,1100,780)): return 'unlock_notice'
+    # A settlement confirmation must have two independent result-only labels.
+    if conf and f.find('获得的道具', (1150,0,1599,160)) and f.find('战斗结果',(1100,740,1430,899)):
+        return 'settlement'
+    if conf and f.any('Rank Up','Rank.Up','等级提升','等级上升') and not f.any('购买','兑换'): return 'rankup'
+    if f.any('解锁缘分') and f.any('结下缘分') and f.find(r'^OK$',(600,550,1000,720)): return 'bond_notice'
+    if f.find(r'^离开$',(50,750,230,899)) and f.find(r'^大厅$',(250,750,430,899)) and f.find(r'^重新进行$',(1300,750,1599,899)): return 'post_clear_exit'
+    if f.find(r'跳过', (1400,0,1599,100)): return 'story'
+    if (f.any('CLEAR','VICTORY') and f.any('关卡任务') and f.any('闯关成功')) or victory_objectives_verified(f): return 'victory'
+    if f.find('准备战斗',(1200,750,1599,899)) and f.find('Episode',(50,0,400,90)):
+        return 'map'
+    if f.find('选择队伍',(1130,750,1599,899)) and f.any('选择辅助英雄'): return 'support'
+    if f.find('进行任务',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'): return 'team'
+    if f.find(r'^Episode$',(1300,120,1599,330)) and f.find(r'Rank',(0,0,400,150)): return 'lobby'
+    if f.find(r'\d\s*/\s*\d',(140,0,400,85)) or f.find(r'\d+\s*/\s*\d+',(280,770,690,899)):
+        return 'battle'
+    if f.any('CLEAR','VICTORY') and not conf: return 'result_transition'
+    if f.image.mean()<13: return 'loading'
+    if conf or cancel: return 'unknown_dialog'
+    return 'unknown'
+
+class Runner:
+    def __init__(self):
+        self.cfg=json.loads((ROOT/'config.json').read_text(encoding='utf-8-sig'))
+        self.s=json.loads((ROOT/'state.json').read_text(encoding='utf8')) if (ROOT/'state.json').exists() else {'schema':1,'started_at':now(),'completed':{},'attempted':{},'active':None,'victories':0}
+        self.ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
+        self.ticket=None; self.last_mode=None; self.mode_since=time.time(); self.battle_seen=0; self.last_gesture=0; self.last_stamina=None; self.unknown_gestures=0
+    def adb(self,*args,timeout=25):
+        r=subprocess.run([self.cfg['adb'],'-s',self.cfg['serial'],*map(str,args)],capture_output=True,timeout=timeout,creationflags=subprocess.CREATE_NO_WINDOW)
+        if r.returncode: raise RuntimeError(r.stderr.decode(errors='replace')[:1000])
+        return r.stdout
+    def capture(self):
+        png=self.adb('exec-out','screencap','-p')
+        raw=cv2.imdecode(np.frombuffer(png,np.uint8),cv2.IMREAD_COLOR)
+        if raw is None: raise RuntimeError('Invalid Android screenshot')
+        h,w=raw.shape[:2]
+        if w<h: raise RuntimeError('Unexpected portrait orientation; no inputs sent')
+        if abs(w/h-16/9)>.03: raise RuntimeError('Use a 16:9 landscape emulator resolution; no inputs sent')
+        im=cv2.resize(raw,(1600,900)) if (w,h)!=(1600,900) else raw
+        results,_=self.ocr(im)
+        f=Frame(im,results,(w,h))
+        self.frame=f
+        tmp=ROOT/'latest.tmp.png'; tmp.write_bytes(cv2.imencode('.png',im)[1].tobytes()); os.replace(tmp,ROOT/'latest.png')
+        atomic_json(ROOT/'latest-ocr.json',dict(time=now(),words=f.words,text=f.text))
+        energy=f.find(r'\d+\s*/\s*\d+',(770,0,925,85)) or f.find(r'\d+\s*/\s*\d+',(950,0,1100,85))
+        if energy:
+            m=re.search(r'(\d+)\s*/\s*(\d+)',energy['text'])
+            if m and int(m.group(2))>=100: self.s['stamina']=int(m.group(1))
+        return f
+    def save(self):
+        self.s['updated_at']=now(); self.s['worker_pid']=os.getpid()
+        self.s['manual_clears']=sum(1 for item in self.s.get('completed',{}).values() if item.get('manual_completed'))
+        self.s['script_victories']=self.s.get('victories',0)-self.s['manual_clears']
+        atomic_json(ROOT/'state.json',self.s)
+        active=self.s.get('active') or self.ticket or {}
+        text=(f"# MuMu 主线运行状态\n\n- 状态：**{self.s.get('status','启动中')}**\n- 更新时间：{self.s['updated_at']}（北京时间）\n- 当前/最近关卡：{active.get('key',self.s.get('last_stage','待识别'))} {active.get('name','')}\n- 本次已确认通关：{self.s.get('victories',0)} 关（脚本 {self.s.get('script_victories',0)}，用户手动补过 {self.s.get('manual_clears',0)}）\n- 最近读取体力：{self.s.get('stamina','未读取')}\n- 说明：{self.s.get('reason','')}\n- 最后动作：{self.s.get('last_action','无')}\n\n安全规则：不兑换/购买体力；不点重复挑战；已尝试关卡不再次入场；无法确认未通关时停止。\n\n最近画面见 latest.png；动作与安全检查见 events.jsonl；通关/尝试记录见 state.json。\n")
+        tmp=ROOT/'STATUS.tmp.md'; tmp.write_text(text,encoding='utf8'); os.replace(tmp,ROOT/'STATUS.md')
+    def evidence(self,label):
+        p=ROOT/'evidence'/f"{dt.datetime.now(TZ):%H%M%S}-{label}.png"; p.parent.mkdir(exist_ok=True)
+        p.write_bytes(cv2.imencode('.png',self.frame.image)[1].tobytes())
+        return str(p.relative_to(ROOT))
+    def ensure_game(self):
+        activity=self.adb('shell','dumpsys','activity','activities').decode('utf8',errors='replace')
+        resumed=[line for line in activity.splitlines() if 'topResumedActivity' in line or 'mResumedActivity' in line]
+        if not any(self.cfg['package'] in line for line in resumed):
+            raise RuntimeError('Foreground Android app is not the authorized game; no input sent')
+    def action(self,kind,word=None,xy=None):
+        self.ensure_game()
+        if time.time()-self.frame.at>5: raise RuntimeError('Stale observation; action cancelled')
+        if resource_warning(self.frame): raise RuntimeError('Resource veto immediately before input')
+        x,y=xy if xy else (word['x'],word['y'])
+        w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
+        event('action',action=kind,xy=coords,stage=(self.s.get('active') or self.ticket or {}).get('key'))
+        self.s['last_action']=kind; self.save()
+        self.adb('shell','input','tap',*coords)
+    def back(self,why):
+        self.ensure_game()
+        event('back',reason=why); self.s['last_action']='返回主线重新验证'; self.save()
+        self.adb('shell','input','keyevent','4')
+    def stop(self,status,reason):
+        self.s.update(status=status,reason=reason,terminal=True,stop_at=now(),stop_evidence=self.evidence('STOP'))
+        self.save(); event('stop',status=status,reason=reason); print(json.dumps({'status':status,'reason':reason},ensure_ascii=False),flush=True)
+        return False,0
+    def completed(self,proof):
+        a=self.s.get('active')
+        if not a: return
+        key=a['key']
+        if key not in self.s['completed']:
+            self.s['completed'][key]={**a,'completed_at':now(),'proof':proof,'evidence':self.evidence('clear-'+key)}
+            self.s['victories']=len(self.s['completed'])
+            event('completed',stage=key,proof=proof)
+        self.s['last_stage']=key; self.s['last_cleared']=a; self.s['active']=None; self.save()
+    def map_ticket(self,f):
+        e=f.find(r'Episode\s*\d+',(50,0,430,90)); c=f.find(r'第\s*\d+\s*章',(80,95,340,160))
+        node,rows=selected_node(f)
+        if not e or not c or not node: return None,rows,'无法可靠识别章节、编号或蓝色选中节点'
+        episode=int(re.search(r'\d+',e['text']).group()); chapter=int(re.search(r'\d+',c['text']).group())
+        d=dict(episode=episode,chapter=chapter,**node)
+        d['key']=f"E{episode}-C{chapter}-S{node['stage']}"; d['verified_epoch']=time.time()
+        if node['green']>=14: return d,rows,'已通关绿色勾'
+        if node.get('lock_score',0)>.81: return d,rows,'锁定关卡'
+        return d,rows,'未通关蓝色当前节点'
+    def title_matches(self,f):
+        if not self.ticket: return False
+        target=norm(self.ticket['name']); titlewords=[w for w in f.words if 1140<w['x']<1560 and 145<w['y']<195]
+        return any(difflib.SequenceMatcher(None,target,norm(w['text'])).ratio()>.68 for w in titlewords)
+    def step(self,f):
+        mode=classify(f); self.s['screen']=mode
+        if mode!=self.last_mode:
+            self.mode_since=time.time(); self.unknown_gestures=0; self.last_mode=mode
+            event('screen',screen=mode,stage=(self.s.get('active') or self.ticket or {}).get('key'))
+        age=time.time()-self.mode_since
+        self.s.update(status='正在推进主线',reason=f'已识别画面：{mode}',terminal=False)
+        if (ROOT/'STOP').exists(): return self.stop('用户停止','检测到 STOP 文件；未关闭游戏')
+        if mode=='network_error':
+            retries=[x for x in self.s.get('network_retries',[]) if time.time()-x<600]
+            if len(retries)>=3: return self.stop('网络异常停止','10分钟内三次网络重连仍未恢复；不重开关卡、不改代理、不消费资源')
+            retries.append(time.time());self.s['network_retries']=retries;self.ticket=None
+            self.s.update(status='正在恢复网络连接',reason='只点击已明确识别的网络重试，不是关卡重试；入场和通关记录保留')
+            self.action('网络重试（非关卡重试）',f.find('点击重试',(500,550,1100,780))); return True,10
+        if mode=='resource_stop':
+            return self.stop('体力不足停止','检测到体力补充/兑换/购买提示；没有确认，没有使用任何兑换资源')
+        if mode=='defeat': return self.stop('强度不足卡关','识别到战斗失败/付费续战界面；不花费资源续战、不重新挑战，保留现场')
+        if mode=='unknown_dialog': return self.stop('安全暂停待修复','出现未列入白名单的确认框；未点击任何确认或购买')
+        if mode=='friend_decline':
+            self.action('取消好友申请提示，不发送任何好友申请',f.find(r'^取消$',(500,570,800,720))); return True,3
+        if mode=='skip_confirm':
+            self.action('确认跳过剧情',f.find(r'^(确认|确定|確定|確認)$')); return True,2
+        if mode=='story':
+            self.action('跳过剧情',f.find('跳过',(1400,0,1599,100))); return True,2
+        if mode=='settlement':
+            if not self.s.get('active') and not self.s.get('last_cleared'):
+                return self.stop('安全暂停待修复','结算画面没有可对应的本次入场记录，停止而非猜测进度')
+            self.completed('独立识别：获得的道具 + 战斗结果 + 结算确认')
+            self.ticket=None
+            self.action('确认通关结算',f.find(r'^(确认|确定|確定|確認)$',(1300,750,1599,899))); return True,4
+        if mode=='unlock_notice':
+            self.action('关闭免费支线解锁通知，继续主线',f.find('点击关闭',(500,550,1100,780))); return True,3
+        if mode=='bond_notice':
+            self.action('关闭已解锁缘分的免费通知',f.find(r'^OK$',(600,550,1000,720))); return True,3
+        if mode=='post_clear_exit':
+            if self.s.get('active') or not self.s.get('last_cleared'): return self.stop('安全暂停待修复','关后离开界面缺少已结算记录；不点重新进行')
+            self.action('已结算后离开关卡，绝不重新进行',f.find(r'^离开$',(50,750,230,899))); return True,4
+        if mode=='story_reward':
+            self.action('关闭已发放的免费奖励遮罩',f.find('点击关闭',(500,500,1100,720))); return True,3
+        if mode=='victory':
+            if not self.s.get('active') and not self.s.get('last_cleared'): return self.stop('安全暂停待修复','胜利页缺少本次入场记录')
+            if self.s.get('active') and not self.s['active'].get('victory_seen'):
+                self.s['active']['victory_seen']=True; self.s['active']['victory_evidence']=self.evidence('victory-'+self.s['active']['key'])
+            self.action('通关星级页继续至结算',xy=(1550,845)); return True,3
+        if mode=='rankup':
+            self.action('关闭等级提升提示',f.find(r'^(确认|确定|確定|確認)$')); return True,3
+        if mode=='lobby':
+            self.ticket=None
+            if self.s.get('active'): return self.stop('安全暂停待修复','未见结算即返回大厅；保留已尝试记录，不重新开同一关')
+            self.action('大厅进入Episode',f.find(r'^Episode$',(1300,120,1599,330))); return True,4
+        if mode=='map':
+            d,rows,proof=self.map_ticket(f)
+            if not d:
+                if age<20: self.save(); return True,4
+                return self.stop('安全暂停待修复',proof)
+            self.s['map_verification']=dict(target=d,proof=proof,rows=rows)
+            a=self.s.get('active')
+            if a:
+                oldrow=next((r for r in rows if r['stage']==a['stage']),None)
+                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and oldrow and oldrow['green']>=14:
+                    self.completed('返回地图后，原关卡出现绿色已通关勾')
+                else: return self.stop('安全暂停待修复','已入场但未确认通关；保留尝试记录，不重复开战')
+            if proof=='锁定关卡': return self.stop('安全暂停待修复','当前节点仍锁定；不入场、不回刷旧关')
+            if proof=='已通关绿色勾' or d['key'] in self.s['completed']:
+                nextrow=next((r for r in rows if r['stage']==d['stage']+1),None)
+                if nextrow and nextrow['green']<14:
+                    self.ticket=None; self.action('避开已通关关卡，选择下一关',xy=(nextrow['x'],nextrow['y'])); return True,3
+                if d['stage']>=10:
+                    self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
+                return self.stop('安全暂停待修复','当前已通关且无法可靠定位下一新关卡；未重复挑战')
+            if d['key'] in self.s['attempted']:
+                return self.stop('安全暂停待修复',f"防重复入场：{d['key']} 已有尝试记录，不再次消耗体力")
+            if self.s.get('last_cleared'):
+                last=self.s['last_cleared']
+                if (d['episode'],d['chapter'],d['stage']) <= (last['episode'],last['chapter'],last['stage']):
+                    return self.stop('安全暂停待修复','关卡编号未向前推进，拒绝倒退刷关')
+            self.ticket=d; self.ticket['proof']=proof; self.ticket['evidence']=self.evidence('preflight-'+d['key']); self.ticket['phase']='map'
+            self.s['verified']=self.ticket; self.s['last_stage']=d['key']
+            event('preflight',target=self.ticket)
+            self.action('未通关验证通过，准备战斗',f.find('准备战斗',(1200,750,1599,899))); return True,3
+        if mode=='support':
+            if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
+                self.ticket=None; self.back('辅助界面没有本轮新关验证凭据'); return True,3
+            if not self.title_matches(f): return self.stop('安全暂停待修复','辅助选择界面的关卡名称与已验证地图节点不一致')
+            self.ticket['phase']='support'
+            self.action('选择当前队伍',f.find('选择队伍',(1130,750,1599,899))); return True,3
+        if mode=='team':
+            if self.s.get('active'): return self.stop('安全暂停待修复','已记录一次入场请求但仍在队伍页；不重复点击进行任务')
+            if not self.ticket or self.ticket.get('phase')!='support' or time.time()-self.ticket['verified_epoch']>120:
+                self.ticket=None; self.back('队伍界面没有完整地图验证链'); return True,3
+            if not self.title_matches(f): return self.stop('安全暂停待修复','开战前关卡名称不一致，拒绝入场')
+            cost=f.find(r'\d+\s*/\s*\d+',(1180,775,1340,880))
+            if not cost or cost['score']<.90:
+                if age<20:
+                    self.s['reason']='入场数字受闪光/动画干扰，等待新截图重新严格读取；尚未入场、不猜测数值'
+                    self.save(); return True,3
+                return self.stop('安全暂停待修复','连续20秒不能可靠读取入场消耗和剩余体力，拒绝猜测')
+            match=re.search(r'(\d+)\s*/\s*(\d+)',cost['text']); required,available=map(int,match.groups())
+            if required>100: return self.stop('安全暂停待修复','入场消耗读数异常')
+            if available<required: return self.stop('体力不足停止',f'开战前体力 {available} 小于消耗 {required}；没有打开兑换框')
+            self.s['stamina']=available
+            hsv=cv2.cvtColor(f.image[650:710,900:1095],cv2.COLOR_BGR2HSV)
+            isauto=np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
+            if not isauto:
+                auto=f.find(r'^AUTO$',(880,625,1100,730))
+                if not auto: return self.stop('安全暂停待修复','无法确认自动战斗开关')
+                self.action('开启自动战斗',auto); return True,2
+            key=self.ticket['key']
+            if key in self.s['attempted'] or key in self.s['completed']: return self.stop('安全暂停待修复','最终开战前防重检查未通过')
+            a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time())
+            self.s['attempted'][key]=a; self.s['active']=a
+            self.s['reason']=f"已验证新关 {key}，本次入场只消耗体力 {required}，绝不兑换"
+            self.save() # Durable intent BEFORE the one permitted entry input.
+            self.action('进行任务（仅一次入场）',f.find('进行任务',(1300,750,1599,899))); self.ticket=None; return True,5
+        if mode=='battle':
+            self.battle_seen=time.time()
+            a=self.s.get('active')
+            if a and time.time()-a['start_epoch']>self.cfg['max_battle_seconds']:
+                return self.stop('安全暂停待修复','单关超时，不能确定强度不足；保持现场，未重开关卡')
+            self.s['reason']='自动战斗中，等待剧情或通关结算；不点击技能、召唤或重试'; self.save(); return True,5
+        if mode in ('loading','result_transition'):
+            if age>180: return self.stop('安全暂停待修复','加载或结果过渡超过3分钟，保留现场等待巡检')
+            self.save(); return True,4
+        # Full-screen CG: only during a recorded run, no popup labels, no battle HUD.
+        a=self.s.get('active')
+        if a and age>=12 and time.time()-self.battle_seen>12 and time.time()-self.last_gesture>25 and self.unknown_gestures<2:
+            if len(f.words)<=8 and not f.any('确认','确定','取消','购买','兑换','补充','使用','消耗','重试','商店','商店','返回','菜单') and f.image.mean()>20:
+                self.last_gesture=time.time(); self.unknown_gestures+=1
+                self.evidence('CG-before')
+                self.action('全屏CG第一下点击',xy=(800,450))
+                time.sleep(.12)
+                # Android touch gesture, not a Windows mouse operation. Same safe CG point.
+                w,h=f.raw_size; x,y=round(w/2),round(h/2)
+                self.adb('shell','input','swipe',x,y,x,y,2800)
+                event('action',action='全屏CG第二下按住2.8秒')
+                self.save(); return True,5
+        if age>90: return self.stop('安全暂停待修复','未知画面持续90秒；不盲点确认、不回刷旧关')
+        self.save(); return True,4
+    def run(self,once=False,observe=False):
+        if self.s.get('terminal') and not observe:
+            print('Terminal state retained; inspect STATUS.md. Resume requires explicit repair/resume.',flush=True); return
+        errors=0
+        while True:
+            try:
+                f=self.capture()
+                if observe:
+                    d,rows,p=self.map_ticket(f) if classify(f)=='map' else (None,[],None)
+                    print(json.dumps(dict(mode=classify(f),text=f.text,target=d,proof=p,rows=rows),ensure_ascii=False,indent=2)); return
+                keep,delay=self.step(f); errors=0
+                print(json.dumps(dict(time=now(),screen=classify(f),status=self.s['status'],active=self.s.get('active',{}),last_action=self.s.get('last_action')),ensure_ascii=False),flush=True)
+                if once or not keep: return
+                time.sleep(delay)
+            except KeyboardInterrupt: return
+            except Exception as exc:
+                errors+=1; event('error',error=str(exc),trace=traceback.format_exc())
+                self.s.update(status='异常重连中',reason=str(exc)); self.save()
+                if errors>=3:
+                    self.s.update(status='安全暂停待修复',reason=f'连续三次异常：{exc}',terminal=True); self.save(); return
+                time.sleep(5)
+                try: subprocess.run([self.cfg['adb'],'connect',self.cfg['serial']],capture_output=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
+                except Exception: pass
+
+def main():
+    parser=argparse.ArgumentParser(); parser.add_argument('--observe',action='store_true'); parser.add_argument('--step',action='store_true'); args=parser.parse_args()
+    import msvcrt
+    lock=(ROOT/'worker.lock').open('a+b')
+    if lock.seek(0,os.SEEK_END)==0: lock.write(b'0'); lock.flush()
+    lock.seek(0)
+    try: msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+    except OSError: print('Worker already running; no second runner created.'); return
+    try: Runner().run(once=args.step,observe=args.observe)
+    finally: lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1); lock.close()
+if __name__=='__main__': main()
+

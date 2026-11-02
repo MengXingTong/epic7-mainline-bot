@@ -1,0 +1,10 @@
+Third-party software notice
+
+The offline full package includes a CPython runtime and public Python OCR dependencies. The source-only ZIP does not bundle these runtimes.
+CPython license: python/LICENSE.txt.
+Dependency license/metadata files are preserved inside vendor/*.dist-info and package directories.
+See requirements.txt for exact bundled versions.
+
+MuMu Player, its ADB tools, Epic Seven, account information, game screenshots, and private progress files are NOT distributed.
+The only game UI reference is a small generic padlock recognition crop in assets/lock.png.
+The local script is provided without compatibility/account-safety guarantees.

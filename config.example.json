@@ -1,0 +1,7 @@
+{
+  "adb": "",
+  "serial": "127.0.0.1:16384",
+  "package": "com.stove.epic7.google",
+  "strict_single_device": true,
+  "max_battle_seconds": 1800
+}
