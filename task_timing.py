@@ -15,7 +15,7 @@ class TransitionPacer:
 
 def next_delay(scene,original,acted=False):
     # Network reconnect backoff is deliberately NOT accelerated.
-    if scene=='network_error':return original
+    if scene in ('network_error','natural_resource_wait'):return original
     if scene=='battle':return 2.5
     if scene in ('loading','result_transition','unknown'):return min(original,1.0)
     return min(original,.45 if acted else .7)

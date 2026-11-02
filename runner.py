@@ -11,6 +11,7 @@ from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash,account_upgrade_notice_close
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
+from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 import copy
 ROOT = data_root()
 for _stream in (sys.stdout,sys.stderr):
@@ -130,6 +131,8 @@ def classify(f):
     if (any(norm(t) in failure_banner for t in ('FAILED','DEFEAT','战斗失败','挑战失败','闯关失败','任務失敗','任务失败'))
         or (f.any('再次挑战','重新挑战','再挑战') and not f.any('获得的道具','任务成功','闯关成功'))): return 'defeat'
     if f.any('给予协助的朋友') and f.any('发送好友申请') and f.find(r'^取消$',(500,570,800,720)) and f.find(r'^申请$',(800,570,1100,720)): return 'friend_decline'
+    if conf and ('跳过教学' in middle or '跳过教學' in middle): return 'tutorial_skip_confirm'
+    if f.find(r'^跳过教学$',(1330,0,1599,100)) and not conf:return 'tutorial_skip'
     if conf and ('跳过故事' in middle or '跳过剧情' in middle): return 'skip_confirm'
     if conf and cancel: return 'unknown_dialog'
     if f.any('故事完成奖励已正常发放','获得星星奖励已正常发放') and f.find('点击关闭',(500,500,1100,720)): return 'story_reward'
@@ -139,13 +142,17 @@ def classify(f):
         return 'settlement'
     if conf and f.any('Rank Up','Rank.Up','等级提升','等级上升') and not f.any('购买','兑换'): return 'rankup'
     if f.any('解锁缘分') and f.any('结下缘分') and f.find(r'^OK$',(600,550,1000,720)): return 'bond_notice'
+    if legacy_region_cards(f):return 'legacy_story_regions'
+    if legacy_map_info(f):return 'legacy_story_map'
+    if legacy_clear_banner(f):return 'legacy_story_clear'
+    if legacy_exit_target(f):return 'legacy_story_exit'
     if f.find(r'^离开$',(50,750,230,899)) and f.find(r'^大厅$',(250,750,430,899)) and f.find(r'^重新进行$',(1300,750,1599,899)): return 'post_clear_exit'
     if f.find(r'跳过', (1400,0,1599,100)): return 'story'
     if (f.any('CLEAR','VICTORY') and f.any('关卡任务') and f.any('闯关成功')) or victory_objectives_verified(f): return 'victory'
     if f.find('准备战斗',(1200,750,1599,899)) and f.find('Episode',(50,0,400,90)):
         return 'map'
     if f.find('选择队伍',(1130,750,1599,899)) and f.any('选择辅助英雄'): return 'support'
-    if f.find('进行任务',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'): return 'team'
+    if f.find('进行任务|战斗开始',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'): return 'team'
     if f.find(r'^Episode$',(1300,120,1599,330)) and f.find(r'Rank',(0,0,400,150)): return 'lobby'
     if f.find(r'\d\s*/\s*\d',(140,0,400,85)) or f.find(r'\d+\s*/\s*\d+',(280,770,690,899)):
         return 'battle'
@@ -234,6 +241,15 @@ class Runner:
         self.s['last_action']=kind; self.save()
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
+    def drag(self,why,start,end):
+        self.ensure_game()
+        if time.time()-self.frame.at>5:raise RuntimeError('Stale observation; map drag cancelled')
+        if capacity_blocker(w['text'] for w in self.frame.words) or resource_warning(self.frame):raise RuntimeError('Business veto before map drag')
+        self.input_sequence=getattr(self,'input_sequence',0)+1;self.s['last_action']=why;self.save();event('drag',reason=why,start=start,end=end)
+        if getattr(self,'pc',None):self.pc.drag(*start,*end)
+        else:
+            w,h=self.frame.raw_size
+            self.adb('shell','input','swipe',round(start[0]*w/1600),round(start[1]*h/900),round(end[0]*w/1600),round(end[1]*h/900),450)
     def back(self,why):
         self.ensure_game()
         self.input_sequence=getattr(self,'input_sequence',0)+1
@@ -305,8 +321,15 @@ class Runner:
             return self.attention('resource','体力/入场资源不足','请手动处理后点“处理后继续”；没有确认、兑换或使用资源。')
         if mode=='defeat': return self.stop('强度不足卡关','识别到战斗失败/付费续战界面；不花费资源续战、不重新挑战，保留现场')
         if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
+        if getattr(self,'story',None):
+            result=self.story.step(f,mode)
+            if result is not None:return result
         if mode=='friend_decline':
             self.action('取消好友申请提示，不发送任何好友申请',f.find(r'^取消$',(500,570,800,720))); return True,3
+        if mode=='tutorial_skip':
+            self.action('跳过已识别的免费地图教学',f.find(r'^跳过教学$',(1330,0,1599,100)));return True,1
+        if mode=='tutorial_skip_confirm':
+            self.action('确认仅跳过教学',f.find(r'^(确认|确定|確定|確認)$'));return True,1
         if mode=='skip_confirm':
             self.action('确认跳过剧情',f.find(r'^(确认|确定|確定|確認)$')); return True,2
         if mode=='story':

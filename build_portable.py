@@ -4,8 +4,8 @@ No download, publishing, live config copy, or account files. Runtimes stay untra
 from pathlib import Path
 import argparse,hashlib,importlib.metadata,json,shutil,sys,zipfile
 ROOT=Path(__file__).resolve().parent
-SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.3.2-preview'
+SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
+VERSION='1.4.0-preview'
 
 
 def copy_tree(source,target):
@@ -55,13 +55,13 @@ def build(args):
     # Keep no local settings or profile. Recipient creates their own only after consent + proof.
     (out/'portable.json').write_text(json.dumps({'app':'Epic7 Unified Assistant','version':VERSION,'platform':'Windows x64','offline':True},indent=2),encoding='utf-8')
     shutil.copy2(ROOT/'docs'/'SHARE_README.md',out/'README_zh-CN.md')
-    shutil.copy2(ROOT/'docs'/'RELEASE_VALIDATION_2026-11-02.md',out/'VALIDATION.md')
+    shutil.copy2(ROOT/'docs'/'STORY_VALIDATION_2026-11-03.md',out/'VALIDATION.md')
     shutil.copy2(out/'Assistant.cmd',out/'启动助手.cmd')
     (out/'SelfCheck.cmd').write_text('@echo off\r\nsetlocal\r\nchcp 65001 >nul\r\n"%~dp0gui\\python.exe" -B -X utf8 "%~dp0portable_selfcheck.py"\r\necho.\r\npause\r\n',encoding='ascii',newline='')
     notices='Offline Windows x64 preview '+VERSION+'\n\nCPython 3.11 GUI license: gui/LICENSE.txt. CPython 3.12 worker license: runtime/LICENSE.txt.\nTcl/Tk licenses: gui/tcl/tcl8.6/license.terms and gui/tcl/tk8.6/license.terms.\nPillow GUI license/metadata: gui/site-packages/pillow-*.dist-info.\nWorker dependency licenses/metadata: vendor/*.dist-info and package directories.\nSee requirements.txt for worker versions; BUILD_INFO.json lists GUI version.\n\nNot distributed: game, MuMu, ADB binary, accounts, credentials, private progress, full game screenshots, logs.\nRecognition assets: one generic padlock crop and 19 position-constrained binary HUD glyph masks. These are game UI reference material, not original game art claimed by this project.\nNo compatibility/account safety warranty. No injection, memory modification or security bypass.\n'
     (out/'THIRD_PARTY_NOTICES.txt').write_text(notices,encoding='utf-8')
     gui_pillow=next(d.version for d in importlib.metadata.distributions(path=[str(site)]) if d.metadata['Name'].lower()=='pillow')
-    (out/'BUILD_INFO.json').write_text(json.dumps({'version':VERSION,'built_date':'2026-11-02','gui_python':'3.11','gui_pillow':gui_pillow,'worker_python':'3.12','sources':list(SOURCES),'privacy':'allowlisted sources + runtimes + binary glyph masks only; no .local or live data'},indent=2),encoding='utf-8')
+    (out/'BUILD_INFO.json').write_text(json.dumps({'version':VERSION,'built_date':'2026-11-03','gui_python':'3.11','gui_pillow':gui_pillow,'worker_python':'3.12','sources':list(SOURCES),'privacy':'allowlisted sources + runtimes + binary glyph masks only; no .local or live data'},indent=2),encoding='utf-8')
     files=[p for p in out.rglob('*') if p.is_file()]
     for p in files:
         rel=p.relative_to(out)
@@ -98,7 +98,10 @@ def build_update(package):
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
 
-本次取消推进次数上限：界面移除次数输入，主线/普通深渊均持续推进，旧limit设置不再生效。
+本次将主线入口统一为“推进剧情关卡”，增加圣女3-7模式及老版自由地图/出口兼容。
+圣女模式需先打开已解锁的《圣女追悼文》，推进至3-7成功结算后只重复3-7；每次独立记录，战败或结果不明不重试。
+剧情体力不足在队伍页等待自然恢复，不购买/兑换；PC地图拖动仍走后台消息，不抢焦点。
+保留取消推进次数上限：界面移除次数输入，主线/普通深渊均持续推进，旧limit设置不再生效。
 不是把30改成更大的数字；没有隐藏的关数/层数上限。暂停、停止、战败和资源不足处理不变。
 保留地图误判修复：未检测到星级不算已通关，已有入场记录不当成应跳过的已完成关。
 每一行都检测锁定，不能再点击带锁的下一关；绿色像素改为通关徽章形状+节点绿环联合证据。

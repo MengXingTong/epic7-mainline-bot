@@ -226,7 +226,10 @@ def mainline_run(request,control):
         control.status('主线窗口与进度预检通过；未读取账号，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
         return
     if not settings['observe']:r.start_current_screen()
-    baseline=len(r.s['completed']);pacer=TransitionPacer()
+    from story_core import StoryController
+    r.story=StoryController(r,settings)
+    count=lambda:len(r.s['completed'])+r.story.total_wins()
+    baseline=count();pacer=TransitionPacer()
     while True:
         try:
             control.check();frame=capture_fresh(r.capture,control)
@@ -244,9 +247,9 @@ def mainline_run(request,control):
             keep,delay=r.step(frame)
             acted=getattr(r,'input_sequence',0)!=before
             if acted:pacer.applied(scene,entry=bool(r.s.get('active') and scene=='team'))
-            if settings.get('fast_mode',True):delay=next_delay(scene,delay,acted)
-            wins=len(r.s['completed'])-baseline
-            control.status(r.s.get('reason','主线运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=len(r.s['completed']),stage=(r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''))
+            if settings.get('fast_mode',True):delay=next_delay('natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene,delay,acted)
+            wins=count()-baseline
+            control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
             if not keep:return
             control.sleep(delay)
         except TaskAttention as exc:

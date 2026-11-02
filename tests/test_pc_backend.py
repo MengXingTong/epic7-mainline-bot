@@ -40,6 +40,28 @@ class PcTests(unittest.TestCase):
             self.b=PcBackend(self.cfg,self.root/'STOP',api=self.api,clock=lambda:self.clock[0])
     def proof(self):return dict(server='Test realm',account_id='12345',window=self.api.window.identity(),checked_at=time.time())
     def ready(self):self.b.capture();self.b.authorize(self.proof())
+    def test_guarded_drag_consumes_frame_and_releases_button(self):
+        self.ready()
+        with patch('pc_backend.time.sleep'):self.b.drag(780,650,780,310)
+        self.assertEqual([c for c in self.api.calls if c[0]=='button'],[('button',True),('button',False)])
+        self.assertIsNone(self.b.frame_at)
+        with self.assertRaises(PcSafetyError):self.b.drag(780,650,780,310)
+    def test_drag_geometry_change_releases_original_button(self):
+        self.ready()
+        from dataclasses import replace
+        self.api.on_down=lambda:setattr(self.api,'window',replace(self.api.window,width=1920,height=1080))
+        with patch('pc_backend.time.sleep'),self.assertRaises(PcSafetyError):self.b.drag(780,650,780,310)
+        self.assertEqual(self.api.calls[-1],('button',False));self.assertIsNone(self.b.frame_at)
+    def test_drag_stop_after_button_down_prevents_further_move(self):
+        self.ready();self.api.on_down=lambda:(self.root/'STOP').write_text('stop')
+        with patch('pc_backend.time.sleep'),self.assertRaises(PcSafetyError):self.b.drag(780,650,780,310)
+        self.assertEqual(self.api.calls,[('move',self.api.window.point(780,650)),('button',True),('button',False)])
+    def test_drag_cannot_use_stale_frame_or_outside_client(self):
+        self.ready();self.clock[0]+=6
+        with self.assertRaises(PcSafetyError):self.b.drag(780,650,780,310)
+        self.assertEqual(self.api.calls,[]);self.b.capture()
+        with self.assertRaises(PcSafetyError):self.b.drag(780,650,2000,310)
+        self.assertEqual(self.api.calls,[])
     def test_selected_target_authorization_needs_no_account_proof(self):
         self.cfg.update(authorization_mode='selected_target');self.cfg.pop('server');self.cfg.pop('account_id')
         self.b.authorize_selected_target(self.api.window.identity());self.b.capture();self.b.tap(800,450)

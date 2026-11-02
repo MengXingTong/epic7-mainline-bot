@@ -26,6 +26,11 @@ class SelectionTests(unittest.TestCase):
     def test_unknown_client(self):
         with self.assertRaises(ValueError):select_target('surprise',[PC])
 
+class DefaultStoryTaskTests(unittest.TestCase):
+    def test_fresh_configuration_defaults_to_story_not_abyss(self):
+        with tempfile.TemporaryDirectory() as folder,patch('assistant_config.CODE_ROOT',Path(folder)),patch('assistant_portable.enabled',return_value=False),patch('assistant_portable.registered_root',return_value=None):
+            self.assertEqual(load_settings(Path(folder))['task'],'mainline')
+
 class HistoryTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)

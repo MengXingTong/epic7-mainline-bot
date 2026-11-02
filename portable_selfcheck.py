@@ -8,11 +8,12 @@ def worker_check():
     import cv2,numpy
     from rapidocr_onnxruntime import RapidOCR
     from abyss_templates import TemplateBank
-    import task_blockers,task_overlays,task_timing,mainline_map,windows_elevation
+    import task_blockers,task_overlays,task_timing,mainline_map,story_core,windows_elevation
     from pc_message_backend import CaptureUnavailable
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(ROOT/'assets'/'abyss')
     assert len(bank.entries)==19,'Abyss glyph resources incomplete'
+    assert story_core.SAINT_STAGE=='3-7'
     assert (ROOT/'assets'/'lock.png').is_file(),'Mainline safety template missing'
     assert all(Path(p).resolve().is_relative_to(ROOT) for p in sys.path if p),'Runtime escaped package directory'
     return {'python':sys.version.split()[0],'opencv':cv2.__version__,'numpy':numpy.__version__,'rapidocr':importlib.metadata.version('rapidocr-onnxruntime'),'abyss_glyphs':len(bank.entries),'ocr_models_loaded':True}
@@ -32,6 +33,7 @@ def main():
         assert not ui['observation_switch_present'] and not ui['account_check_required'] and not ui['foreground_selector_present']
         assert not ui['count_limit_present'] and ui['continuous_run']
         assert ui['footer_bottom']<=ui['workarea'][3]
+        assert ui['tasks']==['mainline','abyss','saint_3_7']
         result['gui']=ui
     result['result']='PASS - offline runtime/UI/resource checks only; no game input or account history created'
     print(json.dumps(result,ensure_ascii=False,indent=2))

@@ -139,6 +139,21 @@ class PcBackend:
     def back(self):
         self.ensure();self.frame_at=None;self.api.escape()
 
+    def drag(self,x1,y1,x2,y2,seconds=.45):
+        if not .1<=seconds<=1:raise PcSafetyError('Unexpected PC drag duration')
+        current=self.ensure();start=current.point(x1,y1);end=current.point(x2,y2)
+        if not self.api.point_is_target(current,*start):raise PcSafetyError('PC drag start is not eligible')
+        self.api.move(*start);self.ensure();self.frame_at=None
+        try:
+            self.api.button(True)
+            for step in range(1,19):
+                self._stop_check()
+                if self.snapshot()!=current:raise PcSafetyError('PC geometry changed during drag')
+                point=(round(start[0]+(end[0]-start[0])*step/18),round(start[1]+(end[1]-start[1])*step/18))
+                if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target lost during drag')
+                self.api.move(*point);time.sleep(seconds/18)
+        finally:self.api.button(False)
+
     def hold(self,x,y,seconds=2.6):
         if not 0<seconds<=4:raise PcSafetyError('Unexpected PC hold duration')
         current=self.ensure();point=current.point(x,y)

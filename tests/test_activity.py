@@ -13,7 +13,7 @@ class ActivityTests(unittest.TestCase):
         for mode in ('observe','run'):
             self.assertIn('不会点击',activity(mode,observe=True,alive=True).title)
     def test_running_has_task_name(self):
-        for task,name in (('mainline','主线'),('abyss','普通深渊')):
+        for task,name in (('mainline','剧情关卡'),('abyss','普通深渊'),('saint_3_7','圣女3-7')):
             self.assertIn('正在推进 · '+name,activity('run',task,False,True).title)
     def test_dead_worker_cannot_show_running(self):
         for mode in ('run','observe'):

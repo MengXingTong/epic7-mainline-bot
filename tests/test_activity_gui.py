@@ -103,3 +103,22 @@ class GuiActivityTests(unittest.TestCase):
         self.assertFalse(hasattr(self.app,'limit_box'));self.assertFalse(hasattr(self.app,'limit'))
         self.assertIn('不设次数上限',self.app.run_policy.cget('text'))
         self.assertNotIn('limit',self.app.current_settings())
+
+    def test_story_and_saint_modes_share_the_same_task_selector(self):
+        from assistant_app import TASKS
+        self.assertEqual(TASKS['推进剧情关卡'],'mainline');self.assertEqual(TASKS['圣女3-7'],'saint_3_7')
+        self.app.task.set('圣女3-7');self.assertEqual(self.app.current_settings()['task'],'saint_3_7')
+        self.app.task.set('推进剧情关卡');self.assertEqual(self.app.current_settings()['task'],'mainline')
+    def test_maintenance_restart_requires_current_run_identity(self):
+        self.worker('run');self.app.start=Mock();self.app.stop=Mock()
+        request={'command_id':'unmatched','expected_run_id':'old','task':'saint_3_7','action':'restart'}
+        with patch('assistant_app.read_json',return_value=request):self.app.pump()
+        self.app.stop.assert_not_called();self.app.start.assert_not_called();self.assertIsNone(self.app.pending_restart)
+    def test_maintenance_restart_waits_for_worker_exit(self):
+        child=self.worker('run');self.app.start=Mock();self.app.stop=Mock()
+        request={'command_id':'maintenance','expected_run_id':'test','task':'saint_3_7','action':'restart'}
+        with patch('assistant_app.read_json',return_value=request):self.app.pump()
+        self.app.stop.assert_called_once();self.app.start.assert_not_called()
+        child.poll.return_value=0
+        with patch('assistant_app.read_json',return_value=request):self.app.pump()
+        self.app.start.assert_called_once();self.assertEqual(self.app.task.get(),'圣女3-7');self.assertIsNone(self.app.pending_restart)

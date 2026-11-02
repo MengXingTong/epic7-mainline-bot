@@ -9,13 +9,13 @@ from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,
 from assistant_status import activity
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','PC 桌面端':'pc'}
-TASKS={'普通深渊':'abyss','主线推进':'mainline'}
+TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7'}
 
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False):
         self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings();self.targets=[];self.filtered=[]
         self.scanning=False;self.last_badge=None;self.worker_warning='';self.status=tk.StringVar(value='尚未启动。选择客户端与任务后点开始推进。')
-        self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False
+        self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False;self.pending_restart=None;self.gui_command_id=None
         root.title('第七史诗 · 统一推进助手');root.configure(bg=BG)
         from ctypes import wintypes
         area=wintypes.RECT();user=ctypes.WinDLL('user32',use_last_error=True)
@@ -59,11 +59,11 @@ class Assistant:
         content=tk.Frame(outer,bg=BG);content.pack(fill='both',expand=True,padx=20,pady=(16,12));outer=content
         tk.Label(outer,text='EPIC SEVEN  /  ONE ASSISTANT',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
         tk.Label(outer,text='统一推进助手',bg=BG,fg=INK,font=('Microsoft YaHei UI',22,'bold')).pack(anchor='w',pady=(4,2))
-        tk.Label(outer,text='双端适配 · 主线与普通深渊 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
+        tk.Label(outer,text='双端适配 · 剧情 / 深渊 / 圣女3-7 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
         connection.columnconfigure(1,weight=1)
         self.client=tk.StringVar(value=next(k for k,v in CLIENTS.items() if v==self.settings.get('client','auto')))
-        self.task=tk.StringVar(value=next(k for k,v in TASKS.items() if v==self.settings.get('task','abyss')))
+        self.task=tk.StringVar(value=next(k for k,v in TASKS.items() if v==self.settings.get('task','mainline')))
         self.instance=tk.StringVar(value='正在检测客户端…')
         self.client_box=self.combo(connection,'客户端',self.client,list(CLIENTS),0)
         self.refresh_button=self.button(connection,'刷新',self.scan,'#e8f0eb',INK);self.refresh_button.grid(row=0,column=2,padx=(8,0))
@@ -157,12 +157,14 @@ class Assistant:
         else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
         if not self.settings.get('data_dir'):
             text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
-        elif TASKS[self.task.get()]=='mainline':
+        elif TASKS[self.task.get()] in ('mainline','saint_3_7'):
             try:
                 state=read_json(Path(self.settings.get('data_dir',''))/'state.json',{})
                 text+=' 原主线记录 '+str(len(state.get('completed',{})))+' 关；'
                 text+='从当前画面继续，不回查旧关；原入场记录留档，不重复入场。'
             except Exception:text+='原进度需要检查，不能清空替代。'
+        if TASKS[self.task.get()]=='saint_3_7':text+=' 当前已打开的圣女支线先推进到3-7；成功后只刷3-7，战败不重试、不购买体力。'
+        elif TASKS[self.task.get()]=='mainline':text+=' 当前旧版支线也按剧情布局推进；从大厅开始默认主线。'
         self.note.set(text)
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
@@ -276,6 +278,17 @@ class Assistant:
                     if self.mode not in ('done','blocked','stopped'):self.mode='blocked';self.status.set('工作进程已退出，未自动重启。')
                     self.update_buttons()
         except queue.Empty:pass
+        try:
+            command=read_json(HOME/'gui-command.json',{})
+            if command.get('command_id') and command['command_id']!=self.gui_command_id:
+                self.gui_command_id=command['command_id']
+                if command.get('expected_run_id')==self.run_id and command.get('task') in TASKS.values() and command.get('action')=='restart':
+                    self.pending_restart=command['task']
+                    if self.process and self.process.poll() is None:self.stop()
+            if self.pending_restart and not self.closing and (self.process is None or self.process.poll() is not None):
+                task=self.pending_restart;self.pending_restart=None
+                self.task.set(next(k for k,v in TASKS.items() if v==task));self.mode='idle';self.start()
+        except Exception as exc:self.log('维护指令未执行：'+str(exc))
         if self.started and self.process and self.process.poll() is None:
             seconds=int(time.monotonic()-self.started);self.elapsed.set(f'{seconds//60:02d}:{seconds%60:02d}')
             if self.mode not in ('paused','attention') and time.monotonic()-self.last_heartbeat>65:
@@ -300,7 +313,7 @@ class Assistant:
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss'));args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7'));args=ap.parse_args()
     locks=[]
     if not args.ui_check:
         kernel=ctypes.WinDLL('kernel32',use_last_error=True);kernel.CreateMutexW.argtypes=[ctypes.c_void_p,ctypes.c_bool,ctypes.c_wchar_p];kernel.CreateMutexW.restype=ctypes.c_void_p
@@ -312,6 +325,17 @@ def main():
     if args.client:app.client.set(next(k for k,v in CLIENTS.items() if v==args.client))
     if args.task:app.task.set(next(k for k,v in TASKS.items() if v==args.task))
     app.update_note()
+    if args.autostart and not args.ui_check and not args.ui_exercise:
+        deadline=time.monotonic()+90
+        def start_selected_once():
+            if app.process is not None:return
+            if app.scanning or not app.filtered:
+                if time.monotonic()<deadline:root.after(500,start_selected_once);return
+                app.mode='blocked';app.status.set('90秒内未找到唯一可用客户端，未启动任务。');app.update_buttons();return
+            if len(app.filtered)!=1:
+                app.mode='blocked';app.status.set('检测到多个实例，未自动选择。');app.update_buttons();return
+            app.start()
+        root.after(800,start_selected_once)
     if args.ui_exercise:
         app.read_only=True;app.task.set('普通深渊');app.client.set('PC 桌面端');app.update_buttons()
         phase=[0];deadline=time.monotonic()+50
