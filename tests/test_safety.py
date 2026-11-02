@@ -97,6 +97,21 @@ class SafetyTests(unittest.TestCase):
     def test_actual_defeat_stops_without_revive_or_replay(self):
         f=fixture('defeat-revive');r=self.make_runner(f);keep,delay=r.step(f)
         self.assertFalse(keep);self.assertEqual(len(r.calls),1);self.assertTrue(r.calls[0].startswith('STOP: 识别到战斗失败'))
+    def test_version_server_error_retries_network_and_preserves_pending_story(self):
+        f=fake([('无法连接至版本服务器。',800,214),('网络连接失败',800,438),('点击重试',802,675)])
+        self.assertEqual(m.classify(f),'network_error');r=self.make_runner(f)
+        book={'active':{'id':'pending','stage':'3-7'},'completed':{'successful':{}},'farm_runs':43}
+        r.s['story_progress']={'books':{'saint_eulogy':copy.deepcopy(book)}}
+        keep,delay=r.step(f);self.assertTrue(keep);self.assertEqual(delay,10)
+        self.assertEqual(r.calls,['网络重试（非关卡重试）']);self.assertEqual(r.s['story_progress']['books']['saint_eulogy'],book)
+    def test_version_retry_needs_all_three_positive_labels_and_positions(self):
+        for words in ([('网络连接失败',800,438),('点击重试',802,675)],[('无法连接至版本服务器。',800,214),('网络连接失败',800,438),('点击重试',1400,825)]):
+            self.assertNotEqual(m.classify(fake(words)),'network_error')
+    def test_version_network_page_does_not_bypass_resources_or_retry_budget(self):
+        words=[('无法连接至版本服务器。',800,214),('网络连接失败',800,438),('点击重试',802,675)]
+        self.assertEqual(m.classify(fake(words+[('购买体力',800,550)])),'resource_stop')
+        r=self.make_runner(fake(words));r.s['network_retries']=[time.time()]*3
+        keep,delay=r.step(fake(words));self.assertFalse(keep);self.assertEqual(len(r.calls),1);self.assertTrue(r.calls[0].startswith('STOP: 10分钟内三次网络重连'))
     def test_actual_network_error_only_retries_connection(self):
         f=fixture('network-retry');self.assertEqual(m.classify(f),'network_error');r=self.make_runner(f);keep,delay=r.step(f)
         self.assertTrue(keep);self.assertEqual(r.calls,['网络重试（非关卡重试）']);self.assertEqual(r.s['attempted'],{})

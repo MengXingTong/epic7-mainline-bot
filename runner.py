@@ -121,6 +121,8 @@ def classify(f):
     if capacity_blocker(w['text'] for w in f.words):return 'capacity_stop'
     if resource_warning(f): return 'resource_stop'
     if (f.any('网络连接异常') and f.any('重新连接') or f.any('与服务器的连接已中断')) and f.find('点击重试',(500,550,1100,780)): return 'network_error'
+    version_retry=(f.find(r'^无法连接至版本服务器[。.]?$',(500,150,1100,280)),f.find(r'^网络连接失败$',(550,350,1050,530)),f.find(r'^点击重试$',(500,550,1100,780)))
+    if all(word and word['score']>=.90 for word in version_retry):return 'network_error'
     if paid_revive_defeat_verified(f): return 'defeat'
     if account_upgrade_notice_close(f.words):return 'account_upgrade_notice'
     if rankup_splash(f.words):return 'rankup_splash'
