@@ -1,4 +1,8 @@
 @echo off
+if "%~1"=="" (
+  call "%~dp0Assistant.cmd" --client pc --task mainline
+  exit /b
+)
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"

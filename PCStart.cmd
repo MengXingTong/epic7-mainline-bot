@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0PC.cmd" start
+call "%~dp0Assistant.cmd" --client pc --task mainline

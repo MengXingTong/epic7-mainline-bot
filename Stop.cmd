@@ -1,11 +1,5 @@
 @echo off
 setlocal
-chcp 65001 >nul
-cd /d "%~dp0"
-if exist "%~dp0python\python.exe" (
-  "%~dp0python\python.exe" -B -X utf8 "%~dp0launcher.py" stop
-) else (
-  py -3.12 -B -X utf8 "%~dp0launcher.py" stop
-)
-echo.
-pause
+set "CONTROL_PYTHON=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+if not exist "%CONTROL_PYTHON%" exit /b 1
+"%CONTROL_PYTHON%" "%~dp0assistant_control.py" stop

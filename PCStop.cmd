@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0PC.cmd" stop
+call "%~dp0Stop.cmd"
