@@ -11,6 +11,10 @@
 
 原 MuMu 离线分享包仍可使用。仓库仅保存可维护源码，不含 Python/OCR 运行库、游戏/ADB 二进制或账号数据。
 
+## 更新与维护
+
+变更记录见 [CHANGELOG](CHANGELOG.md)，维护与发布检查见 [开发说明](docs/DEVELOPMENT.md)。
+
 ## 快速开始（MuMu）
 
 需要 Windows x64、Python 3.12、MuMu 及已登录的游戏。
@@ -25,7 +29,7 @@ py -3.12 launcher.py start
 也可使用 Check.cmd / Start.cmd / Stop.cmd / Resume.cmd。启动需输入 START；安全续跑需输入 RESUME。
 详细配置、停止与恢复见 [MuMu 使用说明](docs/MUMU_GUIDE.md)。
 
-**同一账号在 MuMu 与 PC 之间切换时必须复用完整进度记录，不能通过新建空状态重打已尝试关卡。** 不同账号使用隔离目录。
+**同一账号、同一服务器在 MuMu 与 PC 之间切换时必须复用完整进度记录，不能通过新建空状态重打已尝试关卡。** 不同账号/服务器使用隔离目录；账号不明时不启动、不自动复制或清空记录。
 
 ## 安全底线
 
