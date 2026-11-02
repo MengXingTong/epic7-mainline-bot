@@ -60,13 +60,16 @@ def gate_mainline(state,stop_exists=False):
         raise ValueError('主线保留停止状态：'+str(state.get('status',''))+'；不会自动清除停止记录。')
 
 
-def validate_run(settings,target):
+def validate_run(settings,target,allow_reconcile=False):
     if settings.get('task') not in ('mainline','abyss'):raise ValueError('Unknown task')
     if not 1<=int(settings.get('limit',0))<=30:raise ValueError('本次上限须为1～30。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
     if target['client']=='pc' and settings.get('pc_input') not in ('messages','foreground'):raise ValueError('Invalid PC input mode')
     root,state=history_gate(settings)
-    if settings['task']=='mainline' and not settings.get('observe',False):gate_mainline(state,(root/'STOP').exists())
+    if settings['task']=='mainline' and not settings.get('observe',False):
+        from mainline_reconcile import pending_reconciliation
+        if not (allow_reconcile and pending_reconciliation(state) and not (root/'STOP').exists()):
+            gate_mainline(state,(root/'STOP').exists())
     return root,state
 
 

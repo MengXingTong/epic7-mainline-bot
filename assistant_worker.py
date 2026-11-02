@@ -141,7 +141,7 @@ def abyss_run(request,control):
 
 def mainline_run(request,control):
     settings,target=request['settings'],request['target']
-    root,state=validate_run(settings,target)
+    root,state=validate_run(settings,target,allow_reconcile=True)
     cfg=read_json(root/'config.json',{})
     cfg.update(max_battle_seconds=cfg.get('max_battle_seconds',1800))
     if target['client']=='mumu':
@@ -169,12 +169,39 @@ def mainline_run(request,control):
             from pc_quickstart import inspect_account,capture_frame,return_to_game,same_account
             from rapidocr_onnxruntime import RapidOCR
             backend=PcBackend(cfg['pc'],root/'STOP',api=api)
+            current=backend.snapshot()
+            if (current.hwnd,current.pid,current.created)!=(target['hwnd'],target['pid'],target['created']):raise RuntimeError('所选桌面实例已变化，未切换目标。')
             ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
             capture=lambda:capture_frame(backend,ocr,Path(request['run_dir'])/'preflight')
             control.status('自动核对当前已登录账号；不切服、不处理认证。',mode='run')
-            proof=inspect_account(backend,capture)
+            proof,_=inspect_account(backend,capture)
             if not same_account(proof,state['pc_profile_binding']):raise RuntimeError('当前账号与原主线历史不一致，未换绑。')
             backend.authorize(proof);return_to_game(backend,capture);r.pc=backend
+            from mainline_reconcile import pending_reconciliation,reconcile_live
+            if pending_reconciliation(r.s):
+                control.status('正在自动核对原失败关的手动通关标记；不重打旧关。',mode='run')
+                def final_guard():
+                    backend.ensure()
+                    if backend.window.identity()!=proof['window']:raise RuntimeError('核对窗口与账号证据不一致。')
+                r.s=reconcile_live(root,r.s,proof,capture,backend.tap,final_guard,private_dir=Path(request['run_dir']),log=control.log)
+    elif not settings['observe']:
+        from mainline_reconcile import pending_reconciliation,reconcile_live,match_account
+        if pending_reconciliation(r.s):
+            from assistant_transport import AdbNavigationBackend
+            from pc_quickstart import inspect_account,capture_frame,return_to_game
+            backend=AdbNavigationBackend(settings,target,control.check)
+            capture=lambda:capture_frame(backend,r.ocr,Path(request['run_dir'])/'preflight')
+            control.status('正在核对MuMu当前账号及原关通关标记，不重打。',mode='run')
+            proof,_=inspect_account(backend,capture);match_account(r.s,proof)
+            backend.authorize(proof);return_to_game(backend,capture)
+            r.s=reconcile_live(root,r.s,proof,capture,backend.tap,backend.ensure,private_dir=Path(request['run_dir']),log=control.log)
+    if not settings['observe']:
+        from assistant_config import gate_mainline
+        gate_mainline(r.s,(root/'STOP').exists())
+    if request.get('preflight_only'):
+        frame=r.capture()
+        control.status('主线启动核验通过；原失败关已补记，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
+        return
     baseline=len(r.s['completed']);deadline=None
     while True:
         try:
@@ -197,7 +224,7 @@ def mainline_run(request,control):
 def run_request(request):
     control=Control(request)
     try:
-        root,_=validate_run(request['settings'],request['target'])
+        root,_=validate_run(request['settings'],request['target'],allow_reconcile=True)
         from runtime_paths import exclusive_profile
         with exclusive_profile(root):
             while True:

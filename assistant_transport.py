@@ -113,3 +113,34 @@ class UnifiedTransport:
                 self.api.move(round(start[0]+(end-start[0])*i/24),start[1]);time.sleep(.02)
         finally:self.api.button(False)
         self.last_input=self.input_tick()
+
+class AdbNavigationBackend:
+    """Account/reconciliation navigation only; no stage-entry planner lives here."""
+    def __init__(self,settings,target,check=lambda:None):
+        from types import SimpleNamespace
+        self.transport=UnifiedTransport(settings,target,check);self.latest=None;self.allowed=False
+        identity={'client':'mumu','serial':target['serial'],'package':target['package']}
+        self.window=SimpleNamespace(identity=lambda:dict(identity));self.digest=None
+    def capture(self):
+        self.latest=self.transport.capture();raw=np.array(self.latest.image)[:,:,::-1].copy()
+        self.digest=hashlib.sha256(cv2.resize(raw,(1600,900)).tobytes()).digest()
+        return raw
+    def navigate_account(self,frame):
+        from pc_startup import navigation_target
+        if self.digest!=hashlib.sha256(frame.image.tobytes()).digest():raise RuntimeError('MuMu账号导航画面不匹配。')
+        kind,xy=navigation_target(frame);self._tap(*xy);return kind
+    def authorize(self,proof):
+        if proof.get('window')!=self.window.identity() or not 0<=time.time()-proof.get('checked_at',0)<=120:raise RuntimeError('MuMu账号核对已失效。')
+        self.allowed=True
+    def _tap(self,x,y):
+        from abyss_core import Token
+        if self.latest is None:raise RuntimeError('No fresh MuMu navigation frame')
+        w,h=self.latest.image.size
+        token=Token('verified_navigation',x*w/1600-1,y*h/900-1,2,2)
+        self.transport.tap(self.latest,token)
+    def ensure(self):
+        if not self.allowed:raise RuntimeError('MuMu历史核对尚未通过账号授权。')
+        self.transport._fresh(self.latest)
+    def tap(self,x,y):self.ensure();self._tap(x,y)
+    def back(self):
+        self.ensure();self.transport.frame=None;self.transport.adb('shell','input','keyevent','4')

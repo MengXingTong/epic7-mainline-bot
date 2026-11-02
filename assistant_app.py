@@ -28,6 +28,7 @@ class Assistant:
         style=ttk.Style(root);style.theme_use('clam')
         style.configure('TCombobox',padding=5,font=('Microsoft YaHei UI',10))
         style.configure('TCheckbutton',background=CARD,foreground=INK,font=('Microsoft YaHei UI',9))
+        style.configure('Footer.TCheckbutton',background=BG,foreground=INK,font=('Microsoft YaHei UI',9))
         style.configure('TSpinbox',padding=4,font=('Microsoft YaHei UI',10))
         self.footer=tk.Frame(root,bg=BG);self.footer.pack(side='bottom',fill='x',padx=20,pady=(8,14))
         viewport=tk.Frame(root,bg=BG);viewport.pack(side='top',fill='both',expand=True)
@@ -79,8 +80,8 @@ class Assistant:
         self.limit_box=ttk.Spinbox(row,from_=1,to=30,width=4,textvariable=self.limit);self.limit_box.pack(side='left',padx=8)
         tk.Label(row,text='关 / 层',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(side='left')
         self.observe=tk.BooleanVar(value=bool(self.settings.get('observe',True)));self.confirm=tk.BooleanVar(value=False)
-        self.observe_box=ttk.Checkbutton(options,text='仅观察，不发送任何点击',variable=self.observe,command=self.update_buttons);self.observe_box.pack(anchor='w',pady=(9,3))
-        self.confirm_box=ttk.Checkbutton(options,text='已确认当前队伍及原生自动战斗，允许运行所选模式',variable=self.confirm);self.confirm_box.pack(anchor='w')
+        self.observe_box=ttk.Checkbutton(self.footer,text='仅观察，不发送任何点击',variable=self.observe,command=self.update_buttons,style='Footer.TCheckbutton');self.observe_box.pack(anchor='w',pady=(0,3))
+        self.confirm_box=ttk.Checkbutton(self.footer,text='已确认当前队伍及原生自动战斗，允许运行所选模式',variable=self.confirm,style='Footer.TCheckbutton');self.confirm_box.pack(anchor='w',pady=(0,7))
         tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7).pack(fill='x',pady=(9,0))
         actions=tk.Frame(self.footer,bg=BG);actions.pack(fill='x')
         self.start_button=self.button(actions,'开始观察',self.start,GREEN,'white');self.start_button.pack(side='left',fill='x',expand=True,padx=(0,8))
@@ -134,7 +135,7 @@ class Assistant:
             try:
                 state=read_json(Path(self.settings.get('data_dir',''))/'state.json',{})
                 text+=' 原主线记录 '+str(len(state.get('completed',{})))+' 关；'
-                if state.get('terminal') or state.get('active'):text+='已有停止/未结算记录，不会清空或自动重试。'
+                if state.get('terminal') or state.get('active'):text+='开始时先自动核对原关是否手动通关；未核实不重试、不清空历史。'
             except Exception:text+='原主线记录需要检查，禁止空记录替代。'
         self.note.set(text)
     def update_buttons(self):self.start_button.configure(text='继续运行' if self.mode=='paused' else ('开始观察' if self.observe.get() else '开始推进'))
@@ -161,7 +162,7 @@ class Assistant:
             else:self.status.set('当前任务仍在运行；先暂停或停止后再切换。')
             return
         try:
-            settings=self.current_settings();target=self.selected_target();validate_run(settings,target)
+            settings=self.current_settings();target=self.selected_target();validate_run(settings,target,allow_reconcile=True)
             if not settings['observe'] and not self.confirm.get():raise ValueError('请先确认队伍、原生自动战斗，并允许运行所选模式。')
             py=settings.get('worker_python','')
             if not Path(py).is_file():raise ValueError('工作运行库不存在，停止启动。')
@@ -192,7 +193,7 @@ class Assistant:
         try:
             for _ in range(50):
                 kind,data=self.events.get_nowait()
-                if kind=='targets':self.targets=data;self.filter_targets();self.status.set('已发现 '+str(len(data))+' 个可绑定客户端；默认只观察。')
+                if kind=='targets':self.targets=data;self.filter_targets();self.status.set('已发现 '+str(len(data))+' 个可绑定客户端；'+('仅观察不会点击。' if self.observe.get() else '尚未启动任务。'))
                 elif kind in ('error','log'):self.log(data);self.status.set(data) if kind=='error' else None
                 elif kind=='worker':
                     if data.get('kind')=='status':
@@ -261,7 +262,7 @@ def main():
         root.update_idletasks();root.update()
         image=Image.new('RGB',(294,165),'#e8f4ec');app.photo=ImageTk.PhotoImage(image);app.preview.configure(image=app.photo,text='',height=165)
         root.update_idletasks();root.update()
-        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
+        result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'permission_visible':app.confirm_box.winfo_ismapped(),'permission_bottom':app.confirm_box.winfo_rooty()+app.confirm_box.winfo_height(),'observe_visible':app.observe_box.winfo_ismapped(),'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
         atomic_json(HOME/'ui-check.json',result);root.after(500,root.destroy)
     root.mainloop()
 
