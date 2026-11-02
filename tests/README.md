@@ -13,3 +13,5 @@ Real game screenshots and OCR fixtures are deliberately excluded. Set `EPIC7_PRI
 - `test_pc_fixtures.py`: optional saved PC map images, enabled only with `EPIC7_PC_FIXTURES` pointing at a private local directory. These are classifier regressions, not native input acceptance.
 
 A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI has been tested live. PC input remains opt-in and experimental.
+
+- `test_pc_quickstart.py`: automatic account field discovery, bounded startup navigation, no daily configuration prompts, legacy history reuse, safe first-use initialization, account mismatch/active guards, read-only behavior and STOP restoration; all native APIs are faked.

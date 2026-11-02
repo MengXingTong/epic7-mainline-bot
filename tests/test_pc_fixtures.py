@@ -23,6 +23,10 @@ class PcFixtureTests(unittest.TestCase):
     def test_real_pc_cleared_stage_is_vetoed(self):
         f=fixture('cleared9');node,_,proof=self.ticket(f)
         self.assertEqual(runner.classify(f),'map');self.assertEqual(node['key'],'E3-C3-S9');self.assertEqual(proof,'已通关绿色勾')
+    def test_real_pc_map_navigation_grid_is_positively_identified(self):
+        from pc_startup import navigation_target
+        kind,xy=navigation_target(fixture('map10'))
+        self.assertEqual(kind,'menu');self.assertTrue(1520<xy[0]<1590);self.assertTrue(20<xy[1]<65)
     def test_real_pc_next_node_is_uncleared_not_locked(self):
         f=fixture('map10');node,_,proof=self.ticket(f)
         self.assertEqual(node['key'],'E3-C3-S10');self.assertEqual(proof,'未通关蓝色当前节点');self.assertEqual(node['green'],0);self.assertLess(node['lock_score'],.81)

@@ -7,7 +7,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import os, time
+import os, time, hashlib
 import numpy as np
 
 class PcSafetyError(RuntimeError):
@@ -39,6 +39,7 @@ class PcBackend:
         self.api=api if api is not None else Win32Api()
         self.window=None;self.frame_window=None;self.frame_at=None
         self.allowed=False
+        self.navigation_digest=None
 
     def _stop_check(self):
         if self.stop_path.exists():raise PcSafetyError('STOP marker exists; PC input disabled')
@@ -65,6 +66,8 @@ class PcBackend:
         if before!=after:raise PcSafetyError('PC geometry changed during capture')
         if raw.shape!=(before.height,before.width,3):raise PcSafetyError('PC capture size does not match client area')
         self.frame_window=after;self.frame_at=self.clock()
+        import cv2
+        self.navigation_digest=hashlib.sha256(cv2.resize(raw,(1600,900)).tobytes()).digest()
         return raw
 
     def authorize(self,preflight,max_age=120):
@@ -79,6 +82,30 @@ class PcBackend:
                 raise PcSafetyError('PC account/server proof does not match configuration')
         if preflight.get('window')!=current.identity():raise PcSafetyError('PC preflight belongs to another window/process')
         self.allowed=True
+
+    def navigate_account(self,frame):
+        """Restricted preflight navigation, never general input authorization."""
+        from pc_startup import navigation_target
+        if self.read_only:raise PcSafetyError('Read-only PC backend never navigates')
+        if not self.cfg.get('experimental_input_enabled',False):raise PcSafetyError('Experimental PC input is disabled')
+        self._stop_check()
+        if self.frame_at is None or self.clock()-self.frame_at>5:raise PcSafetyError('Stale startup frame')
+        if hashlib.sha256(frame.image.tobytes()).digest()!=self.navigation_digest:
+            raise PcSafetyError('Startup planner frame does not match native observation')
+        kind,xy=navigation_target(frame)
+        current=self.snapshot()
+        if current!=self.frame_window:raise PcSafetyError('Startup geometry changed')
+        point=current.point(*xy)
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('Startup navigation is covered')
+        self.api.move(*point)
+        if self.snapshot()!=current or not self.api.point_is_target(current,*point):
+            raise PcSafetyError('Startup target changed before mouse-down')
+        self._stop_check()
+        if self.clock()-self.frame_at>5:raise PcSafetyError('Startup frame expired before mouse-down')
+        self.frame_at=None;self.navigation_digest=None
+        try:self.api.button(True)
+        finally:self.api.button(False)
+        return kind
 
     def ensure(self):
         if self.read_only:raise PcSafetyError('Read-only PC backend never sends input')
@@ -192,8 +219,9 @@ class Win32Api:
         finally:self.k.CloseHandle(h)
 
     def windows(self,exe,title):
-        path=os.path.normcase(os.path.abspath(exe))
-        if Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('Only the explicitly configured EpicSeven.exe is allowed')
+        # Empty path is discovery-only; returned identity is pinned before input.
+        path=os.path.normcase(os.path.abspath(exe)) if exe else None
+        if path and Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('Only EpicSeven.exe is allowed')
         c,w=self.c,self.w;result=[]
         with self.dpi():
             for hwnd in self._windows():
@@ -201,7 +229,8 @@ class Win32Api:
                 buf=c.create_unicode_buffer(1024);self.u.GetWindowTextW(hwnd,buf,len(buf))
                 if buf.value!=title:continue
                 pid=w.DWORD();self.u.GetWindowThreadProcessId(hwnd,c.byref(pid));p=self._process(pid.value)
-                if not p or os.path.normcase(os.path.abspath(p[0]))!=path:continue
+                if not p or Path(p[0]).name.lower()!='epicseven.exe':continue
+                if path and os.path.normcase(os.path.abspath(p[0]))!=path:continue
                 r=w.RECT();point=w.POINT(0,0)
                 if not self.u.GetClientRect(hwnd,c.byref(r)) or not self.u.ClientToScreen(hwnd,c.byref(point)):continue
                 result.append(WindowSnapshot(int(hwnd),pid.value,p[0],p[1],point.x,point.y,r.right,r.bottom,self.u.GetDpiForWindow(hwnd)))

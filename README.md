@@ -7,7 +7,7 @@
 | 目标 | 状态 |
 |---|---|
 | MuMu Android 国际服、简体中文 UI、16:9 | 已实机运行；使用本地 ADB |
-| STOVE 官方 PC 客户端 | **实验性原生后端已加入，默认只读；完整实机验收未完成** |
+| STOVE 官方 PC 客户端 | **实验性一键入口已加入；完整原生实机验收未完成** |
 
 原 MuMu 离线分享包仍可使用。仓库仅保存可维护源码，不含 Python/OCR 运行库、游戏/ADB 二进制或账号数据。
 
@@ -17,7 +17,13 @@
 
 ## STOVE PC（实验性）
 
-不要求全屏。按实际游戏客户区和 DPI 映射坐标，不依赖显示器的固定分辨率。先阅读 [PC 使用说明与边界](docs/PC_GUIDE.md)，用 PCCheck 进行只读账号/服务器核对。默认 `experimental_input_enabled: false`；未经验收不要直接无人值守启动。
+**手动登录游戏，停在大厅/主线地图 → 双击 PCStart.cmd → 把游戏前置。**
+
+无需选择服务器、手填账号编号/安装路径、编辑 JSON 或手动打开账号信息页。首次确认实验风险及历史归属后，日常启动不再要求输入确认短语；程序内部自动读取当前角色，不切服、不换号。
+
+PCCheck.cmd 是纯只读检查，PCStop.cmd 停止，PCResume.cmd 明确续跑。已战败/未结算记录依然拒绝重新入场。
+
+不要求全屏。源码版仍需一次性准备 Python 3.12 与依赖；完整说明及旧版进度迁移见 [PC 使用说明](docs/PC_GUIDE.md)。**自动导航和原生全链路尚未实机验收，不是稳定无人值守版。**
 
 ## 快速开始（MuMu）
 
@@ -57,7 +63,8 @@ py -3.12 -m unittest discover -s tests -v
 ## 项目结构
 
 - `runner.py`：识别、校验链、持久化与动作状态机
-- `pc_backend.py` / `pc_launcher.py`：实验性 Windows 客户区后端与严格只读预检
+- `pc_quickstart.py` / `pc_startup.py`：无需手填账号配置的一键入口、有限启动导航与历史绑定
+- `pc_backend.py` / `pc_launcher.py`：实验性 Windows 客户区后端与高级维护工具
 - `runtime_paths.py` / `state_tools.py`：共享账号运行目录与保留原尝试的人工补记
 - `supervisor.py`：有界重启与进程锁
 - `launcher.py`：MuMu 检查、启动、停止和安全续跑
