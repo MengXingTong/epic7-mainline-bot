@@ -15,7 +15,7 @@ INPUTS={'后台窗口消息 · 实验性':'messages','前台兼容模式':'foreg
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False):
         self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings();self.targets=[];self.filtered=[]
-        self.scanning=False;self.last_badge=None;self.status=tk.StringVar(value='尚未启动。选择客户端与任务后点开始推进。')
+        self.scanning=False;self.last_badge=None;self.worker_warning='';self.status=tk.StringVar(value='尚未启动。选择客户端与任务后点开始推进。')
         self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False
         root.title('第七史诗 · 统一推进助手');root.configure(bg=BG)
         from ctypes import wintypes
@@ -42,6 +42,8 @@ class Assistant:
         self.activity_detail=tk.Label(self.activity_panel,text='',bg=CARD,fg=INK,font=('Microsoft YaHei UI',9),anchor='nw',justify='left',height=2,wraplength=550)
         self.activity_detail.pack(fill='x',padx=12,pady=(0,5))
         self.activity_detail.bind('<Configure>',lambda e:self.activity_detail.configure(wraplength=max(120,e.width)))
+        self.warning_label=tk.Label(self.activity_panel,text='',bg=CARD,fg='#956116',font=('Microsoft YaHei UI',9),anchor='w',justify='left',wraplength=550)
+        self.warning_label.bind('<Configure>',lambda e:self.warning_label.configure(wraplength=max(120,e.width)))
         self.activity_progress=ttk.Progressbar(self.activity_panel,mode='indeterminate',length=120,style='Activity.Horizontal.TProgressbar')
         self.activity_progress.pack(fill='x',padx=12,pady=(0,9))
         self.footer=tk.Frame(root,bg=BG);self.footer.pack(side='bottom',fill='x',padx=20,pady=(8,14))
@@ -183,6 +185,10 @@ class Assistant:
         alive=bool(self.process and self.process.poll() is None)
         view=activity('scanning' if self.scanning else self.mode,TASKS.get(self.task.get(),'mainline'),self.read_only,alive)
         self.activity_title.configure(text=view.title,fg=view.color)
+        self.warning_label.configure(text=self.worker_warning)
+        if self.worker_warning:
+            if not self.warning_label.winfo_manager():self.warning_label.pack(fill='x',padx=12,pady=(0,5),before=self.activity_progress)
+        elif self.warning_label.winfo_manager():self.warning_label.pack_forget()
         self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode=='blocked' else INK)
         self.root.title(view.title.split(' · ')[0]+' | 第七史诗 · 统一推进助手')
         if view!=self.last_badge:
@@ -232,7 +238,7 @@ class Assistant:
             atomic_json(self.run_dir/'request.json',request);self.command('run')
             self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
             atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
-            self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
+            self.worker_warning='';self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
             child=self.process
             def reader():
                 with (self.run_dir/'worker.log').open('a',encoding='utf-8') as log:
@@ -270,7 +276,7 @@ class Assistant:
                         incoming=data['mode']
                         if self.mode=='stopping' and incoming not in ('stopped','done','blocked'):continue
                         if self.mode=='pausing' and incoming not in ('paused','stopped','done','blocked'):continue
-                        self.mode=incoming;self.status.set(data['status']);self.scene.set(data.get('scene','—'));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
+                        self.mode=incoming;self.worker_warning=data.get('warning','');self.status.set(data['status']);self.scene.set(data.get('scene','—'));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
                     elif data.get('kind')=='log':self.log(data['text'])
                 elif kind=='exit' and self.process and data==self.process.pid:
                     self.lock_choices(False)

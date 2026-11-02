@@ -2,7 +2,7 @@
 Every paid entry requires a fresh, positively verified uncleared map node.
 """
 from __future__ import annotations
-import argparse, datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback
+import argparse, datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback, tempfile
 from pathlib import Path
 CODE_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_ROOT))
@@ -21,6 +21,26 @@ def atomic_json(path, value):
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
     os.replace(tmp, path)
+def write_status_report(path,text):
+    """Best-effort display report only; never use this for progress/evidence writes."""
+    path=Path(path)
+    if path.name!='STATUS.md':raise ValueError('Best-effort writer is limited to STATUS.md')
+    temporary=None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.STATUS-',suffix='.tmp',delete=False) as stream:
+            temporary=Path(stream.name);stream.write(text)
+        os.replace(temporary,path)
+        return ''
+    except OSError as exc:
+        winerror=getattr(exc,'winerror',None)
+        code=('WinError '+str(winerror)) if winerror is not None else ('errno '+str(exc.errno) if exc.errno is not None else type(exc).__name__)
+        return '状态报告暂时无法更新（'+code+'）；关键进度已保存，以软件界面和 state.json 为准。'
+    finally:
+        # Only this call's newly-created temporary file, never a destination/history file.
+        if temporary is not None:
+            try:temporary.unlink(missing_ok=True)
+            except OSError:pass
+
 def event(kind, **kwargs):
     with (ROOT/'events.jsonl').open('a', encoding='utf8') as f:
         f.write(json.dumps(dict(time=now(),kind=kind,**kwargs),ensure_ascii=False)+'\n')
@@ -182,7 +202,11 @@ class Runner:
         atomic_json(ROOT/'state.json',self.s)
         active=self.s.get('active') or self.ticket or {}
         text=(f"# 第七史诗主线运行状态\n\n- 状态：**{self.s.get('status','启动中')}**\n- 更新时间：{self.s['updated_at']}（北京时间）\n- 当前/最近关卡：{active.get('key',self.s.get('last_stage','待识别'))} {active.get('name','')}\n- 本次已确认通关：{self.s.get('victories',0)} 关（脚本 {self.s.get('script_victories',0)}，用户手动补过 {self.s.get('manual_clears',0)}）\n- 最近读取体力：{self.s.get('stamina','未读取')}\n- 说明：{self.s.get('reason','')}\n- 最后动作：{self.s.get('last_action','无')}\n\n安全规则：不兑换/购买体力；不点重复挑战；已尝试关卡不再次入场；无法确认未通关时停止。\n\n最近画面见 latest.png；动作与安全检查见 events.jsonl；通关/尝试记录见 state.json。\n")
-        tmp=ROOT/'STATUS.tmp.md'; tmp.write_text(text,encoding='utf8'); os.replace(tmp,ROOT/'STATUS.md')
+        previous=getattr(self,'report_warning','')
+        self.report_warning=write_status_report(ROOT/'STATUS.md',text)
+        if self.report_warning!=previous:
+            message=self.report_warning or '状态报告已恢复更新。'
+            print(json.dumps({'kind':'log','text':message},ensure_ascii=False),flush=True)
     def evidence(self,label):
         p=ROOT/'evidence'/f"{dt.datetime.now(TZ):%H%M%S}-{label}.png"; p.parent.mkdir(exist_ok=True)
         p.write_bytes(cv2.imencode('.png',self.frame.image)[1].tobytes())
@@ -416,7 +440,8 @@ def record_pc_startup_failure(exc):
         atomic_json(ROOT/'state.json',state)
         active=state.get('active') or state.get('last_cleared') or {}
         text=(f"# 第七史诗主线运行状态\n\n- 状态：**PC启动安全暂停**\n- 更新时间：{state['updated_at']}\n- 当前/最近关卡：{active.get('key','未识别')}\n- 本次已确认通关：{len(state.get('completed',{}))}\n- 说明：{exc}\n\n启动未完成，不发送输入；全部原始入场/通关记录保留。\n")
-        (ROOT/'STATUS.md').write_text(text,encoding='utf8')
+        warning=write_status_report(ROOT/'STATUS.md',text)
+        if warning:print(json.dumps({'kind':'log','text':warning},ensure_ascii=False),flush=True)
         event('pc_startup_stop',error=str(exc),preserved_all_history=True)
         return True
     except Exception:return False

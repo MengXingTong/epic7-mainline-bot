@@ -5,7 +5,7 @@ from pathlib import Path
 import argparse,hashlib,importlib.metadata,json,shutil,sys,zipfile
 ROOT=Path(__file__).resolve().parent
 SOURCES=('assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.2-preview'
+VERSION='1.2.1-preview'
 
 
 def copy_tree(source,target):
@@ -90,7 +90,7 @@ def build_update(package):
     if archive.exists():raise ValueError('Update archive already exists')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions="""第七史诗统一助手 v1.2 覆盖更新补丁（需要 v1.1 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
@@ -98,7 +98,8 @@ def build_update(package):
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
 
-已取消默认账号/服务器核查和“仅观察”/额外确认勾选；选择客户端、实例与任务后直接开始。
+已修复STATUS.md报告文件占用导致任务停止；报告失败只提示，关键进度写入失败仍停止。
+保留v1.2的直接启动：不核查账号/服务器，没有“仅观察”/额外确认勾选。
 旧 observe=true 被忽略，原记录与停止保护保留。切账号不再自动识别，请用对应原进度。
 本补丁不更换 PrintWindow/SetCursorPos，不保证解决其他机器的截图/输入兼容问题。
 """

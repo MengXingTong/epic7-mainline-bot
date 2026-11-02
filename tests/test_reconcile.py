@@ -86,6 +86,12 @@ class RecoveryTransactionTests(unittest.TestCase):
         self.assertEqual(new['attempted'][KEY]['outcome'],'defeat')
         self.assertTrue(new['completed'][KEY]['manual_completed'])
         self.assertEqual(new['reconciliation_history'][-1]['verification'],'selected_local_profile')
+    def test_report_failure_does_not_undo_persisted_manual_clear(self):
+        with patch('runner.write_status_report',return_value='report temporarily unavailable'):
+            new=self.run_ok()
+        self.assertEqual(json.loads((self.root/'state.json').read_text(encoding='utf-8')),new)
+        self.assertTrue(new['completed'][KEY]['manual_completed'])
+        self.assertEqual(new['attempted'][KEY]['outcome'],'defeat')
     def test_confirm_must_be_a_separate_fresh_frame(self):
         self.frames[1].at=self.frames[0].at
         with self.assertRaises(ReconcileBlocked):self.run_ok()

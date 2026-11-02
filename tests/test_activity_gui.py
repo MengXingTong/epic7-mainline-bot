@@ -73,3 +73,13 @@ class GuiActivityTests(unittest.TestCase):
             self.assertFalse(request['settings']['observe']);self.assertTrue(request['user_selected_profile'])
             self.assertNotIn('first_use_consent',request);self.assertNotIn('bind_existing_consent',request)
             self.assertEqual(self.app.start_button.cget('text'),'检查中…')
+
+    def test_noncritical_warning_keeps_running_state_and_clears_on_recovery(self):
+        self.worker('run');self.app.read_only=False
+        self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':'run','status':'自动战斗中','warning':'状态报告暂时无法更新；关键进度已保存'}))
+        self.app.pump();self.root.update_idletasks()
+        self.assertEqual(self.app.mode,'run');self.assertIn('正在推进',self.app.activity_title.cget('text'))
+        self.assertTrue(self.app.warning_label.winfo_manager());self.assertIn('状态报告',self.app.warning_label.cget('text'))
+        self.assertLessEqual(self.app.stop_button.winfo_rooty()+self.app.stop_button.winfo_height(),self.app.workarea[3])
+        self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':'run','status':'自动战斗中','warning':''}))
+        self.app.pump();self.assertFalse(self.app.warning_label.winfo_manager());self.assertEqual(self.app.mode,'run')

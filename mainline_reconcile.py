@@ -76,7 +76,7 @@ def chapter_back_target(frame,active):
 
 def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=False,expected_server=None,private_dir=None,log=lambda text:None,selected_profile=False):
     """Caller owns profile locks. Two green proofs + target guard + CAS; legacy mode also verifies account."""
-    from runner import classify,resource_warning,now,atomic_json
+    from runner import classify,resource_warning,now,atomic_json,write_status_report
     root=Path(root)
     if not pending_reconciliation(state):raise ReconcileBlocked('没有可安全核对的唯一原失败关卡，未修改历史。')
     if (root/'STOP').exists():raise ReconcileBlocked('用户STOP仍存在，未自动移除停止标记。')
@@ -126,6 +126,7 @@ def reconcile_live(root,state,account,capture,tap,final_guard,*,allow_initial=Fa
     if json.loads((root/'state.json').read_text(encoding='utf-8-sig'))!=original:raise ReconcileBlocked('写入前历史发生变化，取消补记。')
     atomic_json(root/'state.json',new)
     with (root/'events.jsonl').open('a',encoding='utf-8') as file:file.write(json.dumps({'time':stamp,'kind':'manual_clear_auto_reconciled','stage':active['key'],'evidence':str(evidence.relative_to(root))},ensure_ascii=False)+'\n')
-    (root/'STATUS.md').write_text('# 主线状态\n\n已自动核实原失败关卡手动通关，保留历史，可以从下一未通关关卡继续。\n\n原始失败尝试、失败证据与手动通关截图均保留；本次核对未进入关卡。\n',encoding='utf-8')
+    warning=write_status_report(root/'STATUS.md','# 主线状态\n\n已自动核实原失败关卡手动通关，保留历史，可以从下一未通关关卡继续。\n\n原始失败尝试、失败证据与手动通关截图均保留；本次核对未进入关卡。\n')
+    if warning:log(warning)
     log('原关手动通关已核实并补记；未重复消耗体力。')
     return new

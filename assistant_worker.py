@@ -17,6 +17,7 @@ class Control:
         if command.get('run_id')!=self.run_id or command.get('action')=='stop':raise StopRun()
         if command.get('action')=='pause':raise PauseRun()
     def status(self,status=None,**values):
+        if values.get('mode')=='blocked':values.setdefault('warning','')
         self.last.update(values)
         if status is not None:self.last['status']=status
         self.last.update(elapsed=int(time.monotonic()-self.started),updated_at=time.time(),run_id=self.run_id)
@@ -216,7 +217,7 @@ def mainline_run(request,control):
                 control.sleep(2);continue
             keep,delay=r.step(frame)
             wins=len(r.s['completed'])-baseline
-            control.status(r.s.get('reason','主线运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=len(r.s['completed']),stage=(r.s.get('active') or r.ticket or {}).get('key',''))
+            control.status(r.s.get('reason','主线运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=len(r.s['completed']),stage=(r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''))
             if not keep:return
             if wins>=int(settings['limit']):control.status('已达到本次主线关数上限，未进入下一关。',mode='done',wins=wins);return
             control.sleep(delay)
