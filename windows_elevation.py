@@ -5,7 +5,7 @@ RELAUNCH_FLAG='--elevation-requested'
 
 class ElevationApi:
     def __init__(self):
-        if os.name!='nt':raise RuntimeError('This application requires Windows')
+        if os.name!='nt':raise RuntimeError('本程序仅可在 Windows 上运行。')
         from ctypes import wintypes as w
         self.shell=ctypes.WinDLL('shell32',use_last_error=True)
         self.shell.IsUserAnAdmin.argtypes=[];self.shell.IsUserAnAdmin.restype=w.BOOL
@@ -28,4 +28,4 @@ def ensure_administrator(entry,arguments,api=None,executable=None):
     result,error=api.launch(str(executable or sys.executable),parameters,str(entry.parent))
     if result>32:return 'relaunched'
     if error==1223:return 'cancelled'
-    raise RuntimeError('管理员启动失败（WinError '+str(error or result)+'）；没有启动任务。')
+    raise RuntimeError('管理员启动失败（系统错误 '+str(error or result)+'）；没有启动任务。')

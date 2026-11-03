@@ -1,14 +1,15 @@
-"""One-click PC entry: use the logged-in game, discover fields, retain history.
+"""旧版桌面端启动工具：使用已登录游戏并保留原进度。
 
-Advanced/manual tooling remains in pc_launcher.py. Importing this file sends no
-Windows input. Native calls are made only by an explicit start/check command.
+统一界面为推荐入口；此旧版工具仍会核验账号，仅供历史维护。
+导入此模块不会发送游戏输入。桌面端适配仍为实验性。
 """
 from __future__ import annotations
-import argparse,copy,hashlib,json,os,subprocess,sys,time
+import copy,hashlib,json,os,subprocess,sys,time
 from contextlib import ExitStack
 from pathlib import Path
 CODE_ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(CODE_ROOT));sys.path.insert(0,str(CODE_ROOT/'vendor'))
+from ui_text import ChineseArgumentParser,error_text
 
 
 def load_preferences(home):
@@ -134,11 +135,11 @@ def start_supervisor(cfg,root,state,proof,private,release):
     release()
     with (root/'pc-launcher.log').open('a',encoding='utf8') as out:
         child=subprocess.Popen([sys.executable,'-B','-X','utf8',str(CODE_ROOT/'supervisor.py')],cwd=str(root),env=env,stdout=out,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
-    print('已请求启动，PID',child.pid,'；实际战斗状态请看运行记录，不能把启动请求当成已开战。')
+    print('已请求启动，进程编号：',child.pid,'；实际战斗状态请看运行记录，不能把启动请求当成已开战。')
 
 
 def main(argv=None):
-    ap=argparse.ArgumentParser(description=__doc__)
+    ap=ChineseArgumentParser(description=__doc__)
     ap.add_argument('command',choices=['start','resume','check','stop'],nargs='?',default='start')
     ap.add_argument('--delay',type=int,default=7)
     args=ap.parse_args(argv)
@@ -148,7 +149,7 @@ def main(argv=None):
     state=read_state(hint) if hint else None
     if args.command=='stop':
         if not hint:raise RuntimeError('尚无本机运行进度，不需要停止')
-        (hint/'STOP').write_text('Requested by PC user',encoding='utf8');print('已请求停止脚本，不关闭游戏。');return
+        (hint/'STOP').write_text('桌面端用户请求停止',encoding='utf8');print('已请求停止脚本，不关闭游戏。');return
     if args.command!='check' and hint:entry_gate(hint,state,args.command=='resume')
     from runtime_paths import exclusive_profile
     from pc_backend import PcBackend,Win32Api
@@ -162,7 +163,7 @@ def main(argv=None):
         # STOP is only removed by a separate, explicit Resume entry.
         old_stop=None;started=False
         if args.command=='resume' and hint:
-            if input('仅恢复安全暂停，不会重打失败关。确认继续请输入 Y：').strip().upper()!='Y':return
+            if input('仅恢复安全暂停，不会重打失败关。确认继续请输入“继续”：').strip().upper() not in ('继续','Y'):return
             stop=hint/'STOP'
             if stop.exists():old_stop=stop.read_bytes();stop.unlink()
         try:
@@ -185,7 +186,7 @@ def main(argv=None):
                 print('将自动读取当前已登录账号并绑定原进度；有旧历史时不会新建替代。')
                 if hint:print('已有进度：',hint,'；通关数：',len(state['completed']),'；最近通关：',(state.get('last_cleared') or {}).get('key','无'))
                 if hint:print('已有进度：',hint,'；通关数：',len(state['completed']),'；最近通关：',(state.get('last_cleared') or {}).get('key','无'))
-                if input('确认使用当前登录角色及这份历史请输入 Y（以后正常启动不再询问）：').strip().upper()!='Y':return
+                if input('确认使用当前登录角色及这份历史请输入“确认”（以后正常启动不再询问）：').strip().upper() not in ('确认','Y'):return
                 # Console consent steals focus; give time to restore the game.
                 print(f'请在{args.delay}秒内把游戏前置。',flush=True);time.sleep(args.delay)
             proof,frame=inspect_account(b,capture)
@@ -217,4 +218,4 @@ def main(argv=None):
 
 if __name__=='__main__':
     try:main()
-    except Exception as e:print('PC安全停止：'+str(e),file=sys.stderr);raise SystemExit(1)
+    except Exception as e:print('桌面端安全停止：'+error_text(e),file=sys.stderr);raise SystemExit(1)

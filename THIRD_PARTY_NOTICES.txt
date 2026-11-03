@@ -1,10 +1,10 @@
-Third-party software notice
+第三方软件说明
 
-The offline full package includes a CPython runtime and public Python OCR dependencies. The source-only ZIP does not bundle these runtimes.
-CPython license: python/LICENSE.txt.
-Dependency license/metadata files are preserved inside vendor/*.dist-info and package directories.
-See requirements.txt for exact bundled versions.
+完整离线包包含 CPython 运行库和公开的 Python 文字识别依赖；纯源码压缩包不包含这些运行库。
+CPython 许可见 python/LICENSE.txt。
+依赖的许可和元数据保留在 vendor/*.dist-info 及各依赖目录中。
+具体依赖版本见 requirements.txt。第三方许可原文保持不变。
 
-MuMu Player, its ADB tools, Epic Seven, account information, game screenshots, and private progress files are NOT distributed.
-The only game UI reference is a small generic padlock recognition crop in assets/lock.png.
-The local script is provided without compatibility/account-safety guarantees.
+不分发 MuMu 模拟器、其 ADB 工具、第七史诗游戏、账号信息、游戏截图或私有进度。
+源码中唯一的游戏界面参考素材是 assets/lock.png 中的小型通用锁识别裁片。
+本机脚本不提供兼容性或账号安全保证。

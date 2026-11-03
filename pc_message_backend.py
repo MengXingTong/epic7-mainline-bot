@@ -30,45 +30,45 @@ class MessageWin32Api(Win32Api):
         return True
 
     def capture(self,s):
-        if not self.ready(s):raise PcSafetyError('Background target changed, minimized or unsupported')
+        if not self.ready(s):raise PcSafetyError('后台目标已变化、已最小化或不受支持。')
         image,info=MessageProbe(s.hwnd,s.pid).capture()
-        if not info['ok']:raise CaptureUnavailable('PrintWindow did not provide a frame; no screen-copy fallback')
+        if not info['ok']:raise CaptureUnavailable('后台窗口截图未返回画面；不会回退到屏幕复制。')
         pixels=np.array(image)[:,:,::-1].copy()
-        if float(pixels.std())<2:raise CaptureUnavailable('Blank background capture; no input sent')
-        if not self.ready(s):raise PcSafetyError('Background geometry changed during capture')
+        if float(pixels.std())<2:raise CaptureUnavailable('后台截图为空白；未发送输入。')
+        if not self.ready(s):raise PcSafetyError('截图期间后台窗口位置或尺寸发生变化。')
         return pixels
 
     def point_is_target(self,s,x,y):
         return self.ready(s) and s.x<=x<s.x+s.width and s.y<=y<s.y+s.height
 
     def _post(self,msg,wp,lp,release=False):
-        if self.target is None:raise PcSafetyError('No pinned background target')
+        if self.target is None:raise PcSafetyError('尚未锁定后台输入目标。')
         s=self.target
         # Release the paired button on the original HWND only, even after resize.
         if release:
             try:q=MessageProbe(s.hwnd,s.pid).inspect()
             except RuntimeError:return
-        elif not self.ready(s):raise PcSafetyError('Background target changed before message')
+        elif not self.ready(s):raise PcSafetyError('发送窗口消息前后台目标已变化。')
         self.c.set_last_error(0)
         u=MessageProbe(s.hwnd,s.pid).u
         if not u.PostMessageW(s.hwnd,msg,wp,lp):
-            raise PcSafetyError('Window message blocked (Win32 %s); no fallback or privilege bypass'%self.c.get_last_error())
+            raise PcSafetyError('窗口消息被系统阻止（系统错误 %s）；不回退输入方式，也不绕过权限。'%self.c.get_last_error())
 
     def move(self,x,y):
         s=self.target
-        if s is None or not self.point_is_target(s,x,y):raise PcSafetyError('Background point outside pinned client')
+        if s is None or not self.point_is_target(s,x,y):raise PcSafetyError('后台输入位置超出已锁定客户区。')
         self.pending=(int(x-s.x),int(y-s.y))
         if self.down:self._post(0x200,1,self._lp())
 
     def _lp(self):
-        if self.pending is None:raise PcSafetyError('No verified background click point')
+        if self.pending is None:raise PcSafetyError('没有经过核实的后台点击位置。')
         x,y=self.pending
         return (y<<16)|(x&0xffff)
 
     def button(self,down):
         lp=self._lp()
         if down:
-            if self.down:raise PcSafetyError('Unpaired background button-down')
+            if self.down:raise PcSafetyError('后台鼠标按下与释放不配对，已拒绝操作。')
             self._post(0x200,0,lp);self._post(0x201,1,lp);self.down=True
             time.sleep(.07)
         else:

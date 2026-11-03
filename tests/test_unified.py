@@ -133,7 +133,7 @@ class MessageApiTests(unittest.TestCase):
         api.c=SimpleNamespace(set_last_error=Mock(),get_last_error=Mock(return_value=5))
         u=Mock();u.PostMessageW.return_value=0
         with patch('pc_message_backend.MessageProbe',return_value=SimpleNamespace(u=u)):
-            with self.assertRaisesRegex(PcSafetyError,'no fallback'):api._post(0x201,1,0)
+            with self.assertRaisesRegex(PcSafetyError,'不回退输入方式'):api._post(0x201,1,0)
         self.assertEqual(u.method_calls,[unittest.mock.call.PostMessageW(10,0x201,1,0)])
 
 class FrameGuardTests(unittest.TestCase):
@@ -147,7 +147,7 @@ class FrameGuardTests(unittest.TestCase):
     def token(self,x,y):return SimpleNamespace(center=(x,y))
     def test_lower_challenge_region_veto(self):
         t,f=self.make()
-        with self.assertRaisesRegex(RuntimeError,'upper'):t.tap(f,self.token(1450,650),True)
+        with self.assertRaisesRegex(RuntimeError,'右上方的普通深渊'):t.tap(f,self.token(1450,650),True)
         t.api.button.assert_not_called()
     def test_stale_frame_never_clicks(self):
         t,f=self.make();f.captured_at-=10

@@ -10,7 +10,7 @@ def read_json(path,default=None):
     path=Path(path)
     if not path.exists():return default
     value=json.loads(path.read_text(encoding='utf-8-sig'))
-    if not isinstance(value,dict):raise ValueError('Invalid JSON object: '+str(path))
+    if not isinstance(value,dict):raise ValueError('JSON 内容不是有效对象：'+str(path))
     return value
 
 
@@ -50,14 +50,14 @@ def load_settings(home=HOME):
     hint=CODE_ROOT/'.local/python-path.txt'
     if hint.exists():result['worker_python']=hint.read_text(encoding='utf-8-sig').strip()
     if root:
-        if not (Path(root)/'state.json').is_file():raise ValueError('Original mainline history is missing; no empty replacement created')
+        if not (Path(root)/'state.json').is_file():raise ValueError('原主线进度丢失；未创建空记录替代。')
         cfg=read_json(Path(root)/'config.json',{})
         result['mumu']={k:cfg[k] for k in ('adb','serial','package') if k in cfg}
     return result
 
 
 def select_target(client,targets):
-    if client not in ('auto','mumu','pc'):raise ValueError('Unknown client selection')
+    if client not in ('auto','mumu','pc'):raise ValueError('未知的客户端选项。')
     rows=[t for t in targets if client=='auto' or t['client']==client]
     if len(rows)!=1:raise ValueError('未找到唯一客户端；请选择客户端和具体实例，不自动切换。')
     return rows[0]
@@ -79,9 +79,9 @@ def gate_mainline(state,stop_exists=False):
 
 
 def validate_run(settings,target,allow_reconcile=False):
-    if settings.get('task') not in ('mainline','abyss','saint_3_7'):raise ValueError('Unknown task')
-    if target.get('client') not in ('mumu','pc'):raise ValueError('Invalid target')
-    if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('Invalid PC input mode')
+    if settings.get('task') not in ('mainline','abyss','saint_3_7'):raise ValueError('未知的任务类型。')
+    if target.get('client') not in ('mumu','pc'):raise ValueError('所选客户端目标无效。')
+    if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('桌面端输入模式无效；请使用后台窗口消息。')
     from assistant_portable import enabled,registered_root
     if not settings.get('data_dir') and registered_root() is None:
         return HOME/'observations',{'attempted':{},'completed':{}}
@@ -97,7 +97,7 @@ def validate_run(settings,target,allow_reconcile=False):
 
 def reserve_abyss_entry(ledger,floor,details):
     """Durable intent must be saved before the one permitted entry input."""
-    if not isinstance(floor,int) or floor<1:raise ValueError('Invalid Abyss floor')
+    if not isinstance(floor,int) or floor<1:raise ValueError('深渊层数无效。')
     key=str(floor)
     if key in ledger['attempted']:raise ValueError('该层已有入场记录，不重复开战。')
     ledger['attempted'][key]=dict(details)

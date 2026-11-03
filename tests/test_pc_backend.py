@@ -171,7 +171,7 @@ class PcTests(unittest.TestCase):
         cfg={'backend':'stove_pc','data_dir':str(self.root),'pc':self.cfg}
         state={'attempted':{},'completed':{},'pc_profile_binding':{'server':'Other realm','account_id':'12345'}}
         (self.root/'state.json').write_text(json.dumps(state));path=self.root/'config.json';path.write_text(json.dumps(cfg))
-        with self.assertRaisesRegex(RuntimeError,'another PC account/server'):pc_launcher.load_settings(path)
+        with self.assertRaisesRegex(RuntimeError,'其他桌面端账号或服务器'):pc_launcher.load_settings(path)
         self.assertEqual(json.loads((self.root/'state.json').read_text()),state)
 
     def test_readonly_check_with_active_history_does_not_mutate_or_input(self):
@@ -226,7 +226,7 @@ class ResolutionTests(unittest.TestCase):
         api=FakeApi();api.window=replace(api.window,width=625,height=352)
         with tempfile.TemporaryDirectory() as tmp:
             b=PcBackend({'game_exe':api.window.exe},Path(tmp)/'STOP',api=api)
-            with self.assertRaisesRegex(PcSafetyError,'too small'):b.capture()
+            with self.assertRaisesRegex(PcSafetyError,'客户区过小'):b.capture()
             self.assertEqual(api.calls,[])
     def test_readonly_backend_can_inspect_stop_but_never_input(self):
         api=FakeApi()

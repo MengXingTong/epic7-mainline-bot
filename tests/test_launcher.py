@@ -48,9 +48,11 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'绿色通关标记'):L.resume_checked()
             self.assertTrue((root/'STOP').exists());self.assertEqual(json.loads((root/'state.json').read_text()),state);spawn.assert_not_called()
     def test_manual_clear_resume_preserves_attempt_and_does_not_reenter(self):
-        root,state,module=self.resume_case({'key':'stage-a'},'已通关绿色勾')
-        with patch.object(L,'ROOT',root),patch.object(L,'setup'),patch.dict(sys.modules,{'runner':module}),patch('builtins.input',return_value='RESUME'),patch.object(L,'spawn_supervisor') as spawn:
-            self.assertEqual(L.resume_checked(),0);after=json.loads((root/'state.json').read_text());self.assertFalse(after['terminal']);self.assertIsNone(after['active']);self.assertEqual(after['attempted']['stage-a']['cost'],8);self.assertEqual(after['attempted']['stage-a']['outcome'],'defeat');self.assertTrue(after['completed']['stage-a']['manual_completed']);self.assertEqual(after['network_retries'],[1,2,3]);spawn.assert_called_once()
+        for answer in ('继续','RESUME'):
+            with self.subTest(answer=answer):
+                root,state,module=self.resume_case({'key':'stage-a'},'已通关绿色勾')
+                with patch.object(L,'ROOT',root),patch.object(L,'setup'),patch.dict(sys.modules,{'runner':module}),patch('builtins.input',return_value=answer),patch.object(L,'spawn_supervisor') as spawn:
+                    self.assertEqual(L.resume_checked(),0);after=json.loads((root/'state.json').read_text());self.assertFalse(after['terminal']);self.assertIsNone(after['active']);self.assertEqual(after['attempted']['stage-a']['cost'],8);self.assertEqual(after['attempted']['stage-a']['outcome'],'defeat');self.assertTrue(after['completed']['stage-a']['manual_completed']);self.assertEqual(after['network_retries'],[1,2,3]);spawn.assert_called_once()
     def test_network_resume_never_clears_retry_or_attempt_history(self):
         root,state,module=self.resume_case(None,'none',mode='lobby')
         with patch.object(L,'ROOT',root),patch.object(L,'setup'),patch.dict(sys.modules,{'runner':module}),patch('builtins.input',return_value='RESUME'),patch.object(L,'spawn_supervisor'):

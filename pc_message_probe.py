@@ -55,14 +55,14 @@ class MessageProbe:
         self.u.SetThreadDpiAwarenessContext(c.c_void_p(-4))
 
     def inspect(self):
-        if not self.u.IsWindow(self.hwnd): raise ProbeError('Target window no longer exists')
+        if not self.u.IsWindow(self.hwnd): raise ProbeError('目标窗口已不存在。')
         pid=w.DWORD(); self.u.GetWindowThreadProcessId(self.hwnd,c.byref(pid))
         text=c.create_unicode_buffer(256); cls=c.create_unicode_buffer(256)
         self.u.GetWindowTextW(self.hwnd,text,len(text));self.u.GetClassNameW(self.hwnd,cls,len(cls))
         if pid.value!=self.pid or text.value not in ('\u7b2c\u4e03\u53f2\u8bd7','\u7b2c\u4e03\u53f2\u8a69','Epic Seven'):
-            raise ProbeError('Target identity changed')
+            raise ProbeError('目标窗口身份已变化。')
         r=w.RECT()
-        if not self.u.GetClientRect(self.hwnd,c.byref(r)):raise ProbeError('Cannot read client geometry')
+        if not self.u.GetClientRect(self.hwnd,c.byref(r)):raise ProbeError('无法读取客户区位置和尺寸。')
         return WindowIdentity(self.hwnd,self.pid,text.value,cls.value,r.right,r.bottom,self.u.GetForegroundWindow()==self.hwnd,bool(self.u.IsIconic(self.hwnd)))
 
     def cursor(self):
@@ -81,10 +81,10 @@ class MessageProbe:
         """PrintWindow experiment; return image and API outcome, never claim freshness."""
         from PIL import Image
         s=self.inspect()
-        if s.minimized or s.width<640 or s.height<360:raise ProbeError('Restore the game before probing')
+        if s.minimized or s.width<640 or s.height<360:raise ProbeError('请先还原游戏窗口，再执行诊断。')
         src=self.u.GetDC(self.hwnd);dc=self.g.CreateCompatibleDC(src)
         bitmap=self.g.CreateCompatibleBitmap(src,s.width,s.height)
-        if not (src and dc and bitmap):raise ProbeError('Cannot allocate capture resources')
+        if not (src and dc and bitmap):raise ProbeError('无法分配截图资源。')
         old=self.g.SelectObject(dc,bitmap)
         class Header(c.Structure):
             _fields_=[('size',w.DWORD),('width',w.LONG),('height',w.LONG),('planes',w.WORD),('bits',w.WORD),('compression',w.DWORD),('image_size',w.DWORD),('x',w.LONG),('y',w.LONG),('used',w.DWORD),('important',w.DWORD)]
@@ -95,7 +95,7 @@ class MessageProbe:
             ok=bool(self.u.PrintWindow(self.hwnd,dc,3));error=c.get_last_error()
             self.g.SelectObject(dc,old);old=None
             lines=self.g.GetDIBits(dc,bitmap,0,s.height,buf,c.byref(h),0)
-            if lines!=s.height:raise ProbeError('Incomplete PrintWindow output')
+            if lines!=s.height:raise ProbeError('后台窗口截图输出不完整。')
             return Image.frombytes('RGB',(s.width,s.height),buf.raw,'raw','BGRX'),{'ok':ok,'error':error,'identity':asdict(s)}
         finally:
             if old:self.g.SelectObject(dc,old)
@@ -104,24 +104,24 @@ class MessageProbe:
     def navigation_click(self, method, action, observed_at, observed_identity):
         # Only non-spending Back controls. No generic click API and no entry buttons.
         positions={'clear_return':(.12,.925),'normal_back':(.027,.045)}
-        if action not in positions or method not in ('post','send'):raise ProbeError('Unapproved diagnostic action')
-        if not 0<=time.time()-observed_at<=12:raise ProbeError('Diagnostic observation expired')
+        if action not in positions or method not in ('post','send'):raise ProbeError('诊断操作不在允许范围内。')
+        if not 0<=time.time()-observed_at<=12:raise ProbeError('诊断画面已过期。')
         before=self.inspect()
-        if before!=observed_identity:raise ProbeError('Window changed since observation')
-        if before.foreground or before.minimized:raise ProbeError('This probe requires an unfocused, restored game')
+        if before!=observed_identity:raise ProbeError('观察后窗口已变化。')
+        if before.foreground or before.minimized:raise ProbeError('此诊断要求游戏窗口已还原且处于失焦状态。')
         foreground=self.u.GetForegroundWindow();cursor=self.cursor()
         x,y=positions[action];x=round(x*before.width);y=round(y*before.height)
         lp=(y<<16)|(x&0xffff)
         def emit(msg,wp):
             current=self.inspect()
-            if current!=before:raise ProbeError('Target changed during diagnostic input')
+            if current!=before:raise ProbeError('诊断输入期间目标已变化。')
             c.set_last_error(0)
             if method=='post':ok=self.u.PostMessageW(self.hwnd,msg,wp,lp)
             else:
                 result=c.c_size_t()
                 ok=self.u.SendMessageTimeoutW(self.hwnd,msg,wp,lp,0x22,250,c.byref(result))
             error=c.get_last_error()
-            if not ok:raise ProbeError(f'{method} message rejected: Win32 error {error}; no elevation or bypass attempted')
+            if not ok:raise ProbeError(f'窗口消息发送失败（方式 {method}，系统错误 {error}）；未尝试提权或绕过权限。')
         emit(0x200,0)
         emit(0x201,1)
         try:time.sleep(.12)

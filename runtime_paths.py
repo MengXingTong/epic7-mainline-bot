@@ -31,7 +31,7 @@ def exclusive_profile(root):
             handle.seek(0)
             try:msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
             except OSError:
-                handle.close();raise RuntimeError('A supervisor/worker already owns this profile; no PC input or state write')
+                handle.close();raise RuntimeError('已有守护进程或工作进程占用此进度；不发送桌面端输入，也不写入状态。')
             handles.append(handle)
         yield release
     finally:release()

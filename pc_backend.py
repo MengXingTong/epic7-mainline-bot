@@ -30,7 +30,7 @@ class WindowSnapshot:
 
     def point(self,x,y):
         if not (0 <= x < 1600 and 0 <= y < 900):
-            raise PcSafetyError('PC target is outside the normalized game client')
+            raise PcSafetyError('桌面端目标超出标准化游戏客户区。')
         return self.x+min(self.width-1,int(x*self.width/1600)), self.y+min(self.height-1,int(y*self.height/900))
 
 class PcBackend:
@@ -42,96 +42,96 @@ class PcBackend:
         self.navigation_digest=None
 
     def _stop_check(self):
-        if self.stop_path.exists():raise PcSafetyError('STOP marker exists; PC input disabled')
+        if self.stop_path.exists():raise PcSafetyError('检测到停止标记；已禁用桌面端输入。')
 
     def snapshot(self):
         if not self.read_only:self._stop_check()
         candidates=self.api.windows(self.cfg['game_exe'],self.cfg.get('window_title','第七史诗'))
-        if len(candidates)!=1:raise PcSafetyError('Expected exactly one authorized PC game window')
+        if len(candidates)!=1:raise PcSafetyError('必须且只能找到一个已授权的桌面端游戏窗口。')
         current=candidates[0]
-        if current.width<640 or current.height<360:raise PcSafetyError('PC client too small; enlarge the window')
+        if current.width<640 or current.height<360:raise PcSafetyError('桌面端游戏客户区过小，请放大窗口。')
         ratio=current.width/current.height
-        if not 1.4<=ratio<=2.4:raise PcSafetyError('Unsupported PC client aspect ratio')
+        if not 1.4<=ratio<=2.4:raise PcSafetyError('不支持当前桌面端游戏客户区的宽高比。')
         if abs(ratio-16/9)>.03 and not self.cfg.get('allow_stretched_client',False):
-            raise PcSafetyError('Non-16:9 client needs explicit locally validated allow_stretched_client')
+            raise PcSafetyError('非 16:9 客户区需先在本机验证，并明确启用拉伸客户区配置。')
         if self.window is not None and current.identity()!=self.window.identity():
-            raise PcSafetyError('PC game process/window changed; a new account preflight is required')
-        if not self.api.ready(current):raise PcSafetyError('PC game is unfocused, minimized, covered or off-screen')
+            raise PcSafetyError('桌面端游戏进程或窗口已变化；旧版启动流程需要重新核验账号。')
+        if not self.api.ready(current):raise PcSafetyError('桌面端游戏已失焦、最小化、被遮挡或位于屏幕外。')
         self.window=current
         return current
 
     def capture(self):
         before=self.snapshot();raw=self.api.capture(before)
         after=self.snapshot()
-        if before!=after:raise PcSafetyError('PC geometry changed during capture')
-        if raw.shape!=(before.height,before.width,3):raise PcSafetyError('PC capture size does not match client area')
+        if before!=after:raise PcSafetyError('截图期间桌面端窗口位置或尺寸发生变化。')
+        if raw.shape!=(before.height,before.width,3):raise PcSafetyError('桌面端截图尺寸与游戏客户区不一致。')
         self.frame_window=after;self.frame_at=self.clock()
         import cv2
         self.navigation_digest=hashlib.sha256(cv2.resize(raw,(1600,900)).tobytes()).digest()
         return raw
 
     def authorize(self,preflight,max_age=120):
-        if self.read_only:raise PcSafetyError('Read-only PC backend cannot be authorized for input')
+        if self.read_only:raise PcSafetyError('只读桌面端后端不能授权执行输入。')
         current=self.snapshot()
         if not self.cfg.get('experimental_input_enabled',False):
-            raise PcSafetyError('Experimental PC input is disabled in configuration')
+            raise PcSafetyError('配置中未启用实验性桌面端输入。')
         if time.time()-preflight.get('checked_at',0)>max_age or preflight.get('checked_at',0)>time.time()+5:
-            raise PcSafetyError('PC account preflight expired')
+            raise PcSafetyError('桌面端账号预检已过期。')
         for key in ('server','account_id'):
             if not self.cfg.get(key) or preflight.get(key)!=self.cfg[key]:
-                raise PcSafetyError('PC account/server proof does not match configuration')
-        if preflight.get('window')!=current.identity():raise PcSafetyError('PC preflight belongs to another window/process')
+                raise PcSafetyError('桌面端账号或服务器核验凭据与配置不符。')
+        if preflight.get('window')!=current.identity():raise PcSafetyError('桌面端预检凭据属于其他窗口或进程。')
         self.allowed=True
 
     def authorize_selected_target(self,identity):
         """Explicit GUI target selection, independent of server/account OCR."""
-        if self.read_only:raise PcSafetyError('Read-only PC backend cannot be authorized for input')
+        if self.read_only:raise PcSafetyError('只读桌面端后端不能授权执行输入。')
         if self.cfg.get('authorization_mode')!='selected_target' or not self.cfg.get('experimental_input_enabled',False):
-            raise PcSafetyError('Selected-window authorization is not enabled')
+            raise PcSafetyError('未启用所选窗口授权。')
         current=self.snapshot()
-        if current.identity()!=identity:raise PcSafetyError('Selected PC window/process changed; no input')
+        if current.identity()!=identity:raise PcSafetyError('所选桌面端窗口或进程已变化；不发送输入。')
         self.allowed=True
 
     def navigate_account(self,frame):
         """Restricted preflight navigation, never general input authorization."""
         from pc_startup import navigation_target
-        if self.read_only:raise PcSafetyError('Read-only PC backend never navigates')
-        if not self.cfg.get('experimental_input_enabled',False):raise PcSafetyError('Experimental PC input is disabled')
+        if self.read_only:raise PcSafetyError('只读桌面端后端不执行导航。')
+        if not self.cfg.get('experimental_input_enabled',False):raise PcSafetyError('实验性桌面端输入未启用。')
         self._stop_check()
-        if self.frame_at is None or self.clock()-self.frame_at>5:raise PcSafetyError('Stale startup frame')
+        if self.frame_at is None or self.clock()-self.frame_at>5:raise PcSafetyError('启动画面已过期，已拒绝操作。')
         if hashlib.sha256(frame.image.tobytes()).digest()!=self.navigation_digest:
-            raise PcSafetyError('Startup planner frame does not match native observation')
+            raise PcSafetyError('启动导航画面与原生窗口观察结果不一致。')
         kind,xy=navigation_target(frame)
         current=self.snapshot()
-        if current!=self.frame_window:raise PcSafetyError('Startup geometry changed')
+        if current!=self.frame_window:raise PcSafetyError('启动期间窗口位置或尺寸发生变化。')
         point=current.point(*xy)
-        if not self.api.point_is_target(current,*point):raise PcSafetyError('Startup navigation is covered')
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('启动导航目标被遮挡，已拒绝操作。')
         self.api.move(*point)
         if self.snapshot()!=current or not self.api.point_is_target(current,*point):
-            raise PcSafetyError('Startup target changed before mouse-down')
+            raise PcSafetyError('按下鼠标前启动目标已变化。')
         self._stop_check()
-        if self.clock()-self.frame_at>5:raise PcSafetyError('Startup frame expired before mouse-down')
+        if self.clock()-self.frame_at>5:raise PcSafetyError('按下鼠标前启动画面已过期。')
         self.frame_at=None;self.navigation_digest=None
         try:self.api.button(True)
         finally:self.api.button(False)
         return kind
 
     def ensure(self):
-        if self.read_only:raise PcSafetyError('Read-only PC backend never sends input')
+        if self.read_only:raise PcSafetyError('只读桌面端后端不发送输入。')
         self._stop_check()
-        if not self.allowed:raise PcSafetyError('PC input has no verified target authorization')
+        if not self.allowed:raise PcSafetyError('桌面端输入缺少已核实的目标授权。')
         if self.frame_at is None or self.clock()-self.frame_at>5:
-            raise PcSafetyError('Stale PC frame; no input sent')
+            raise PcSafetyError('桌面端画面已过期；未发送输入。')
         current=self.snapshot()
-        if current!=self.frame_window:raise PcSafetyError('PC window moved, resized or changed DPI after observation')
+        if current!=self.frame_window:raise PcSafetyError('观察后桌面端窗口发生移动、缩放或显示比例变化。')
         return current
 
     def tap(self,x,y):
         current=self.ensure();point=current.point(x,y)
-        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC click point is covered by another window')
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端点击位置被其他窗口遮挡。')
         self.api.move(*point)
         self.ensure()
-        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target changed before mouse-down')
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('按下鼠标前桌面端目标已变化。')
         self.frame_at=None  # Consume even when the input result is unknown.
         try:self.api.button(True)
         finally:self.api.button(False)
@@ -140,32 +140,32 @@ class PcBackend:
         self.ensure();self.frame_at=None;self.api.escape()
 
     def drag(self,x1,y1,x2,y2,seconds=.45):
-        if not .1<=seconds<=1:raise PcSafetyError('Unexpected PC drag duration')
+        if not .1<=seconds<=1:raise PcSafetyError('桌面端拖动时长不符合允许范围。')
         current=self.ensure();start=current.point(x1,y1);end=current.point(x2,y2)
-        if not self.api.point_is_target(current,*start):raise PcSafetyError('PC drag start is not eligible')
+        if not self.api.point_is_target(current,*start):raise PcSafetyError('桌面端拖动起点不符合输入条件。')
         self.api.move(*start);self.ensure();self.frame_at=None
         try:
             self.api.button(True)
             for step in range(1,19):
                 self._stop_check()
-                if self.snapshot()!=current:raise PcSafetyError('PC geometry changed during drag')
+                if self.snapshot()!=current:raise PcSafetyError('拖动期间桌面端窗口位置或尺寸发生变化。')
                 point=(round(start[0]+(end[0]-start[0])*step/18),round(start[1]+(end[1]-start[1])*step/18))
-                if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target lost during drag')
+                if not self.api.point_is_target(current,*point):raise PcSafetyError('拖动期间桌面端目标失效。')
                 self.api.move(*point);time.sleep(seconds/18)
         finally:self.api.button(False)
 
     def hold(self,x,y,seconds=2.6):
-        if not 0<seconds<=4:raise PcSafetyError('Unexpected PC hold duration')
+        if not 0<seconds<=4:raise PcSafetyError('桌面端按住时长不符合允许范围。')
         current=self.ensure();point=current.point(x,y)
-        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC hold target is covered')
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端按住目标被遮挡。')
         self.api.move(*point);self.ensure()
-        if not self.api.point_is_target(current,*point):raise PcSafetyError('PC hold target changed')
+        if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端按住目标已变化。')
         try:
             self.api.button(True)
             end=self.clock()+seconds
             while self.clock()<end:
                 self.ensure()
-                if not self.api.point_is_target(current,*point):raise PcSafetyError('PC target lost during hold')
+                if not self.api.point_is_target(current,*point):raise PcSafetyError('按住期间桌面端目标失效。')
                 time.sleep(.05)
         finally:
             self.api.button(False);self.frame_at=None
@@ -173,7 +173,7 @@ class PcBackend:
 class Win32Api:
     """Foreground screen-copy backend; no PostMessage, hooks or game-memory access."""
     def __init__(self):
-        if os.name!='nt':raise PcSafetyError('STOVE PC transport requires Windows')
+        if os.name!='nt':raise PcSafetyError('实验性 STOVE 桌面端适配仅可在 Windows 上运行。')
         import ctypes as c
         from ctypes import wintypes as w
         self.c=c;self.w=w
@@ -221,7 +221,7 @@ class Win32Api:
     @contextmanager
     def dpi(self):
         old=self.u.SetThreadDpiAwarenessContext(self.c.c_void_p(-4))
-        if not old:raise PcSafetyError('Cannot establish per-monitor DPI-aware coordinates')
+        if not old:raise PcSafetyError('无法建立适配各显示器缩放比例的坐标系。')
         try:yield
         finally:self.u.SetThreadDpiAwarenessContext(old)
 
@@ -229,7 +229,7 @@ class Win32Api:
         result=[]
         @self.CB
         def callback(hwnd,_):result.append(hwnd);return True
-        if not self.u.EnumWindows(callback,0):raise PcSafetyError('Cannot enumerate PC windows')
+        if not self.u.EnumWindows(callback,0):raise PcSafetyError('无法枚举桌面端窗口。')
         return result
 
     def _process(self,pid):
@@ -245,7 +245,7 @@ class Win32Api:
     def windows(self,exe,title):
         # Empty path is discovery-only; returned identity is pinned before input.
         path=os.path.normcase(os.path.abspath(exe)) if exe else None
-        if path and Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('Only EpicSeven.exe is allowed')
+        if path and Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('仅允许选择游戏进程 EpicSeven.exe。')
         c,w=self.c,self.w;result=[]
         with self.dpi():
             for hwnd in self._windows():
@@ -285,16 +285,16 @@ class Win32Api:
         with self.dpi():
             screen=self.u.GetDC(None);dc=None;bitmap=None;old=None
             try:
-                if not screen:raise PcSafetyError('Cannot acquire screen device context')
+                if not screen:raise PcSafetyError('无法获取屏幕设备上下文。')
                 dc=self.g.CreateCompatibleDC(screen);bitmap=self.g.CreateCompatibleBitmap(screen,s.width,s.height)
-                if not dc or not bitmap:raise PcSafetyError('Cannot create PC capture surface')
+                if not dc or not bitmap:raise PcSafetyError('无法创建桌面端截图画布。')
                 old=self.g.SelectObject(dc,bitmap)
-                if not old or old==c.c_void_p(-1).value:raise PcSafetyError('Cannot select PC capture bitmap')
-                if not self.g.BitBlt(dc,0,0,s.width,s.height,screen,s.x,s.y,0x00CC0020|0x40000000):raise PcSafetyError('PC client screen-copy failed')
+                if not old or old==c.c_void_p(-1).value:raise PcSafetyError('无法选择桌面端截图位图。')
+                if not self.g.BitBlt(dc,0,0,s.width,s.height,screen,s.x,s.y,0x00CC0020|0x40000000):raise PcSafetyError('桌面端客户区屏幕复制失败。')
                 self.g.SelectObject(dc,old);old=None
                 info=Info();info.header=Header(c.sizeof(Header),s.width,-s.height,1,32,0,0,0,0,0,0)
                 pixels=np.empty((s.height,s.width,4),np.uint8)
-                if self.g.GetDIBits(dc,bitmap,0,s.height,pixels.ctypes.data,c.byref(info),0)!=s.height:raise PcSafetyError('Incomplete PC screenshot')
+                if self.g.GetDIBits(dc,bitmap,0,s.height,pixels.ctypes.data,c.byref(info),0)!=s.height:raise PcSafetyError('桌面端截图不完整。')
                 return pixels[:,:,:3].copy()
             finally:
                 if old:self.g.SelectObject(dc,old)
@@ -304,19 +304,19 @@ class Win32Api:
 
     def move(self,x,y):
         if any(self.u.GetAsyncKeyState(k)&0x8000 for k in (1,2,4,16,17,18,91,92)):
-            raise PcSafetyError('User is holding a mouse/modifier key; PC input cancelled')
+            raise PcSafetyError('检测到用户正按住鼠标或修饰键；已取消桌面端输入。')
         with self.dpi():
-            if not self.u.SetCursorPos(x,y):raise PcSafetyError('Cannot position PC cursor')
+            if not self.u.SetCursorPos(x,y):raise PcSafetyError('无法定位桌面端鼠标光标。')
 
     def _send(self,item):
-        if self.u.SendInput(1,self.c.byref(item),self.c.sizeof(item))!=1:raise PcSafetyError('PC input was blocked; no privilege bypass attempted')
+        if self.u.SendInput(1,self.c.byref(item),self.c.sizeof(item))!=1:raise PcSafetyError('桌面端输入被系统阻止；未尝试绕过权限。')
 
     def button(self,down):
         item=self.Input();item.type=0;item.data.mi=self.Mouse(0,0,0,2 if down else 4,0,0);self._send(item)
 
     def escape(self):
         if any(self.u.GetAsyncKeyState(k)&0x8000 for k in (1,2,4,16,17,18,91,92)):
-            raise PcSafetyError('User is holding an input key; Escape cancelled')
+            raise PcSafetyError('检测到用户正按住输入按键；已取消返回操作。')
         item=self.Input();item.type=1;item.data.ki=self.Key(0x1B,0,0,0,0)
         try:self._send(item)
         finally:item.data.ki.flags=2;self._send(item)

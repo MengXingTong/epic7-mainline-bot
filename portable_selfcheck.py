@@ -1,8 +1,9 @@
 """Offline checks only: never discover clients, navigate accounts or send game input."""
-import argparse,importlib.metadata,json,os,subprocess,sys,tempfile
+import importlib.metadata,json,os,subprocess,sys,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
+from ui_text import ChineseArgumentParser
 
 def worker_check():
     import cv2,numpy
@@ -12,14 +13,14 @@ def worker_check():
     from pc_message_backend import CaptureUnavailable
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(ROOT/'assets'/'abyss')
-    assert len(bank.entries)==19,'Abyss glyph resources incomplete'
+    assert len(bank.entries)==19,'深渊字形资源不完整。'
     assert story_core.SAINT_STAGE=='3-7'
-    assert (ROOT/'assets'/'lock.png').is_file(),'Mainline safety template missing'
-    assert all(Path(p).resolve().is_relative_to(ROOT) for p in sys.path if p),'Runtime escaped package directory'
+    assert (ROOT/'assets'/'lock.png').is_file(),'缺少主线安全识别模板。'
+    assert all(Path(p).resolve().is_relative_to(ROOT) for p in sys.path if p),'运行库路径越出软件包目录。'
     return {'python':sys.version.split()[0],'opencv':cv2.__version__,'numpy':numpy.__version__,'rapidocr':importlib.metadata.version('rapidocr-onnxruntime'),'abyss_glyphs':len(bank.entries),'ocr_models_loaded':True}
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--worker',action='store_true');args=ap.parse_args()
+    ap=ChineseArgumentParser();ap.add_argument('--worker',action='store_true');args=ap.parse_args()
     if args.worker:print(json.dumps(worker_check()));return
     out=subprocess.run([str(ROOT/'runtime'/'python.exe'),'-B','-X','utf8',str(__file__),'--worker'],capture_output=True,text=True,encoding='utf-8',timeout=90)
     if out.returncode:raise RuntimeError(out.stderr or out.stdout)
@@ -35,7 +36,7 @@ def main():
         assert ui['footer_bottom']<=ui['workarea'][3]
         assert ui['tasks']==['mainline','abyss','saint_3_7']
         result['gui']=ui
-    result['result']='PASS - offline runtime/UI/resource checks only; no game input or account history created'
+    result['result']='检查通过：仅验证离线运行库、界面和资源；未发送游戏输入，也未创建账号历史。'
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 if __name__=='__main__':main()

@@ -26,7 +26,7 @@ class UnifiedTransport:
             self.api=MessageWin32Api()
             rows=self.api.windows(target['exe'],target['title'])
             if len(rows)!=1 or rows[0].hwnd!=target['hwnd'] or rows[0].pid!=target['pid'] or rows[0].created!=target['created']:
-                raise PcSafetyError('Selected PC instance changed')
+                raise PcSafetyError('所选桌面端实例已变化，已停止操作。')
             self.window=rows[0]
         else:self.api=None
 
@@ -40,8 +40,8 @@ class UnifiedTransport:
         self.check()
         if self.api:
             rows=self.api.windows(self.target['exe'],self.target['title'])
-            if len(rows)!=1 or rows[0].identity()!=self.window.identity():raise PcSafetyError('PC process/window changed')
-            if not self.api.ready(rows[0]):raise PcSafetyError('PC background window unavailable or minimized')
+            if len(rows)!=1 or rows[0].identity()!=self.window.identity():raise PcSafetyError('桌面端进程或窗口已变化，已停止操作。')
+            if not self.api.ready(rows[0]):raise PcSafetyError('桌面端后台窗口不可用或已最小化，已停止操作。')
             return rows[0]
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf-8',errors='replace')
         lines=[l for l in activity.splitlines() if 'topResumedActivity' in l or 'mResumedActivity' in l]
@@ -55,11 +55,11 @@ class UnifiedTransport:
         tick=self.input_tick()
         if self.api:raw=self.api.capture(before)
         else:raw=cv2.imdecode(np.frombuffer(self.adb('exec-out','screencap','-p'),np.uint8),cv2.IMREAD_COLOR)
-        if raw is None:raise RuntimeError('Invalid client capture')
+        if raw is None:raise RuntimeError('未取得有效的客户端画面。')
         h,w=raw.shape[:2]
         if w<640 or h<360 or abs(w/h-16/9)>.035:raise RuntimeError('请使用至少640×360的16:9横屏客户区。')
         after=self.ensure()
-        if before!=after:raise RuntimeError('Client geometry changed during capture')
+        if before!=after:raise RuntimeError('截图期间客户端位置或尺寸发生变化，已停止操作。')
         f=FrameSnapshot(Image.fromarray(raw[:,:,::-1]),after,at,tick)
         self.last_input=tick
         self.frame=f;self.frame_window=after
@@ -67,21 +67,21 @@ class UnifiedTransport:
 
     def _fresh(self,f):
         self.check()
-        if f is not self.frame or time.monotonic()-f.captured_at>5:raise RuntimeError('Stale/consumed frame; no input')
-        if self.ensure()!=f.binding:raise RuntimeError('Client geometry changed after observation')
-        if f.input_tick is not None and self.input_tick()!=f.input_tick:raise RuntimeError('Manual foreground input invalidated this frame')
+        if f is not self.frame or time.monotonic()-f.captured_at>5:raise RuntimeError('画面已过期或已使用；不发送输入。')
+        if self.ensure()!=f.binding:raise RuntimeError('观察后客户端位置或尺寸发生变化，已停止操作。')
+        if f.input_tick is not None and self.input_tick()!=f.input_tick:raise RuntimeError('检测到手动输入，当前画面校验已失效。')
 
     def tap(self,f,token,ordinary_gate=False):
         self._fresh(f)
         x,y=token.center;w,h=f.image.size
-        if not (0<=x<w and 0<=y<h):raise RuntimeError('Click outside game client')
-        if ordinary_gate and not (.80*w<=x<=.99*w and .20*h<=y<=.53*h):raise RuntimeError('Only the upper ordinary Abyss entrance is allowed')
+        if not (0<=x<w and 0<=y<h):raise RuntimeError('点击位置超出游戏客户区，已拒绝操作。')
+        if ordinary_gate and not (.80*w<=x<=.99*w and .20*h<=y<=.53*h):raise RuntimeError('只允许进入右上方的普通深渊入口。')
         self.frame=None # Consume before any input; failure never retries the same frame.
         if self.api:
             s=f.binding;px=s.x+int(x*s.width/w);py=s.y+int(y*s.height/h)
-            if not self.api.point_is_target(s,px,py):raise RuntimeError('PC target is no longer eligible')
+            if not self.api.point_is_target(s,px,py):raise RuntimeError('桌面端目标已不再符合输入条件。')
             self.api.move(px,py);self.check()
-            if not self.api.ready(s):raise RuntimeError('PC input target changed')
+            if not self.api.ready(s):raise RuntimeError('桌面端输入目标已变化，已停止操作。')
             try:
                 self.api.button(True)
             finally:self.api.button(False)
@@ -99,7 +99,7 @@ class UnifiedTransport:
             self.api.button(True)
             for i in range(1,25):
                 self.check()
-                if not self.api.ready(s):raise RuntimeError('PC changed during carousel drag')
+                if not self.api.ready(s):raise RuntimeError('拖动列表期间桌面端目标发生变化，已停止操作。')
                 self.api.move(round(start[0]+(end-start[0])*i/24),start[1]);time.sleep(.02)
         finally:self.api.button(False)
         self.last_input=self.input_tick()
@@ -121,14 +121,14 @@ class AdbNavigationBackend:
         kind,xy=navigation_target(frame);self._tap(*xy);return kind
     def authorize_selected_target(self,target):
         expected={k:self.transport.target[k] for k in ('serial','package')}
-        if {k:target[k] for k in ('serial','package')}!=expected:raise RuntimeError('MuMu selected instance changed')
+        if {k:target[k] for k in ('serial','package')}!=expected:raise RuntimeError('所选 MuMu 模拟器实例已变化，已停止操作。')
         self.transport.ensure();self.allowed=True
     def authorize(self,proof):
         if proof.get('window')!=self.window.identity() or not 0<=time.time()-proof.get('checked_at',0)<=120:raise RuntimeError('MuMu账号核对已失效。')
         self.allowed=True
     def _tap(self,x,y):
         from abyss_core import Token
-        if self.latest is None:raise RuntimeError('No fresh MuMu navigation frame')
+        if self.latest is None:raise RuntimeError('没有可用于导航的新鲜模拟器画面。')
         w,h=self.latest.image.size
         token=Token('verified_navigation',x*w/1600-1,y*h/900-1,2,2)
         self.transport.tap(self.latest,token)

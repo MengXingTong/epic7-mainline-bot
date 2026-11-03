@@ -131,7 +131,7 @@ def classify(o,normal_verified=False):
     blocker=capacity_blocker(t.text for t in o.tokens)
     if blocker:return Reading(Scene.CAPACITY,(blocker.title,blocker.reason))
     if _account_upgrade_target(o) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.ACCOUNT_UPGRADE,('升级','账号升等、行动力上限已提升','点击关闭'))
-    if rankup_splash([dict(text=t.text,x=t.center[0],y=t.center[1]) for t in o.tokens],o.width,o.height) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.RANKUP,('RANK UP','免费Rank提升与已恢复行动力','继续旅程'))
+    if rankup_splash([dict(text=t.text,x=t.center[0],y=t.center[1]) for t in o.tokens],o.width,o.height) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.RANKUP,('RANK UP','免费等级提升与已恢复行动力','继续旅程'))
     if o.contains(*BLOCKED_PHRASES) or o.has("确认","确定","取消","购买","复活"):
         return Reading(Scene.BLOCKED,("资源/付费/确认弹窗",))
     if o.has("战斗失败","挑战失败","defeat","失败","重新挑战"):
@@ -155,7 +155,7 @@ def classify(o,normal_verified=False):
     if o.find("战斗",region=(.86,.34,.99,.57)) and o.find("召唤",region=(.86,.53,.99,.76)) and o.find("商店",region=(.86,.65,.99,.87)):
         return Reading(Scene.LOBBY,("右侧战斗/召唤/商店导航",))
     if normal_verified and ("battle-pause" in o.visuals or o.has("战斗暂停按钮")):
-        return Reading(Scene.BATTLE,("战斗HUD","普通深渊上下文"))
+        return Reading(Scene.BATTLE,('战斗界面',"普通深渊上下文"))
     if o.has("victory","战斗胜利"): return Reading(Scene.VICTORY,("胜利过场",))
     return Reading(Scene.UNKNOWN)
 
@@ -193,7 +193,7 @@ class Session:
         if scene==Scene.ACCOUNT_UPGRADE:
             return self._action("关闭免费账号升级行动力上限提示",_account_upgrade_target(o),"account-upgrade-close",scene)
         if scene==Scene.RANKUP:
-            return self._action("关闭免费Rank升级提示",Token("继续",o.width*.49,o.height*.96,o.width*.02,o.height*.02),"rankup-continue",scene)
+            return self._action('关闭免费等级提升提示',Token("继续",o.width*.49,o.height*.96,o.width*.02,o.height*.02),"rankup-continue",scene)
         if scene in (Scene.CAPACITY,Scene.BLOCKED):
             raise TaskAttention("capacity" if scene==Scene.CAPACITY else "dialog",reading.evidence[0] if reading.evidence else "等待处理","请手动处理当前提示后点“处理后继续”；不会自动确认、购买或重新入场。")
         if scene in (Scene.HARD,Scene.DEFEAT):

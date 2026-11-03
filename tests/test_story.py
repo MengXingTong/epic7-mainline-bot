@@ -98,7 +98,7 @@ class LegacyScenes(unittest.TestCase):
         f=fixture('clear-defense');self.assertEqual(runner.classify(f),'legacy_story_clear')
         self.assertIsNone(exit_target(f,clear_overlay=True));r,s=make(f);s.bind('圣王国伊杰拉')
         s.book['active']={'id':'d','stage':'1-7'};s.step(f,'legacy_story_clear')
-        self.assertTrue(s.book['active']['victory_seen']);self.assertIn('关闭CLEAR',r.action.call_args.args[0]);self.assertEqual(s.book['completed'],{})
+        self.assertTrue(s.book['active']['victory_seen']);self.assertIn('关闭胜利遮罩',r.action.call_args.args[0]);self.assertEqual(s.book['completed'],{})
     def test_already_settled_blue_exit_leaves_instead_of_clicking_forever(self):
         f=fixture('exit-after-clear-3-6');self.assertEqual(runner.classify(f),'legacy_story_exit')
         r,s=make(f);s.bind('圣域最深处');s.book['last_cleared']='3-6'

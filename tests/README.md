@@ -19,3 +19,11 @@ A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI h
 ## Legacy story and Saint 3-7
 
 `test_story.py` covers exact preparation-stage reads, three/five-wave CLEAR, blue exits before/after settlement, native region routes, map panning, task switching and success-only repetition. Its synthetic policy cases run without private screenshots and never call native input. Saved-image regressions use `EPIC7_STORY_FIXTURES` (local `.local/story-validation` by default); absent private fixtures are explicitly skipped. `test_pc_backend.py` also checks drag cancellation, geometry changes, frame consumption and paired release using fakes.
+
+## 中文展示回归
+
+`test_localization.py` 检查全部主线场景的中文显示名称、命令行帮助和参数错误、项目自定义异常提示、系统错误格式、启动脚本编码，以及新文案模块是否进入打包白名单。保留命令与配置协议，等级提示识别仍使用原游戏文字。`test_activity_gui.py` 补充界面标题和原始场景代码的中文展示；`test_launcher.py` 同时验证中文与旧英文确认词均保留原进度保护。全部使用隔离数据或模拟后端，不产生游戏输入。
+
+## 统一测试入口与 CI 依赖
+
+源码依赖由 `install_dependencies.py` 安装到 `vendor`，请使用 `python -B -X utf8 run_offline_tests.py -v` 运行全套测试，保证在导入首个测试前加载依赖目录。GitHub Actions 额外设置 `EPIC7_REQUIRE_GUI_TESTS=1`；Pillow、Tk 或界面导入失败均报错，不再被误判为可跳过的“没有界面运行库”。`test_test_entrypoint.py` 覆盖路径顺序、依赖预检、严格界面模式和失败退出码，使用模拟依赖，不进行游戏下载、打包或游戏输入。

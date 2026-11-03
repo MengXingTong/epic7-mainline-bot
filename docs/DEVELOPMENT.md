@@ -10,8 +10,10 @@
 
 ```powershell
 py -3.12 install_dependencies.py
-py -3.12 -B -X utf8 -m unittest discover -s tests -v
+py -3.12 -B -X utf8 run_offline_tests.py -v
 ```
+
+统一测试入口会在发现测试前将仓库根目录和 `vendor` 加入模块搜索路径，避免依赖已安装却因导入顺序找不到 `PIL`。GitHub Actions 设置 `EPIC7_REQUIRE_GUI_TESTS=1`，预先验证 Pillow、Tk 和统一界面导入；依赖异常直接失败，不得伪装成界面测试跳过。这个工作流只做离线验证，不会生成或上传便携包。
 
 公开源码不分发真实账号截图素材，因此相关用例会明确标记 skipped。本机完整回归可通过环境变量 `EPIC7_PRIVATE_FIXTURES` 指向自己的私有素材目录。不要把该目录或变量的个人绝对路径提交到仓库。
 

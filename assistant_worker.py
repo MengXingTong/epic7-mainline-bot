@@ -1,8 +1,9 @@
 """One private worker for mainline/Abyss on MuMu/PC. No GUI, no supervisor retries."""
 from __future__ import annotations
-import argparse, hashlib, json, os, subprocess, sys, time, traceback
+import  hashlib, json, os, subprocess, sys, time, traceback
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
+from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention
 from task_timing import TransitionPacer,next_delay
@@ -89,7 +90,7 @@ def discover(settings):
     api=Win32Api();targets=[]
     for title in ('第七史诗','第七史詩','Epic Seven'):
         for s in api.windows('',title):
-            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · PID {s.pid} · {s.width}×{s.height}'))
+            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · 进程编号 {s.pid} · {s.width}×{s.height}'))
     from launcher import find_adb
     cfg=settings.setdefault('mumu',{})
     adb=find_adb(cfg.get('adb',''))
@@ -109,7 +110,7 @@ def discover(settings):
             package=cfg.get('package','com.stove.epic7.google')
             out=subprocess.run([str(adb),'-s',serial,'shell','pm','path',package],capture_output=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW)
             if out.returncode or not out.stdout.strip().startswith(b'package:'):continue
-            targets.append(dict(client='mumu',serial=serial,package=package,label='MuMu · '+serial+' · ADB后台'))
+            targets.append(dict(client='mumu',serial=serial,package=package,label='MuMu · '+serial+' · 后台调试连接'))
     return targets
 
 
@@ -153,7 +154,7 @@ def abyss_run(request,control):
             control.status('只读观察，不发送点击' if settings['observe'] else '普通深渊推进中',mode='observe' if settings['observe'] else 'run',scene=reading.scene.value+floor_text,wins=session.wins,expected_floor=session.expected_floor)
             signature=(reading.scene,reading.floor,reading.available_floor)
             stable=stable+1 if previous==signature else 1
-            if previous!=signature:control.log('识别：'+reading.scene.value+floor_text)
+            if previous!=signature:control.log('识别：'+scene_name(reading.scene)+floor_text)
             previous=signature
             if settings['observe']:
                 if request.get('once'):return
@@ -347,18 +348,18 @@ def run_request(request):
         if control.last.get('mode') in ('starting','observe'):control.status('只读检查完成；未发送输入。',mode='done')
     except StopRun:control.status('已停止；没有关闭游戏或清除历史。',mode='stopped')
     except Exception as exc:
-        control.status(str(exc),mode='blocked')
-        control.log('安全停止：'+str(exc))
+        control.status(error_text(exc),mode='blocked')
+        control.log('安全停止：'+error_text(exc))
         with (control.folder/'diagnostic.log').open('a',encoding='utf-8') as f:f.write(traceback.format_exc()+'\n')
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--request',type=Path);ap.add_argument('--discover',type=Path)
+    ap=ChineseArgumentParser();ap.add_argument('--request',type=Path);ap.add_argument('--discover',type=Path)
     args=ap.parse_args()
     if args.discover:
         settings=read_json(args.discover);targets=discover(settings)
         print(json.dumps({'targets':targets,'mumu':settings.get('mumu',{})},ensure_ascii=False));return
-    if not args.request:raise RuntimeError('A private request file is required')
+    if not args.request:raise RuntimeError('必须提供本机私有任务请求文件。')
     run_request(read_json(args.request))
 
 if __name__=='__main__':main()

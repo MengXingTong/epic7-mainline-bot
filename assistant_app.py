@@ -1,6 +1,7 @@
 """Unified lightweight desktop UI. Transport and task choices are independent."""
 from __future__ import annotations
-import argparse,ctypes,json,os,queue,subprocess,sys,threading,time,uuid
+from ui_text import ChineseArgumentParser,error_text
+import ctypes,json,os,queue,subprocess,sys,threading,time,uuid
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -8,7 +9,7 @@ from PIL import Image,ImageTk
 from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,validate_run,window_layout
 from assistant_status import activity,scene_caption
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
-CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','PC 桌面端':'pc'}
+CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','电脑客户端':'pc'}
 TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7'}
 
 class Assistant:
@@ -57,7 +58,7 @@ class Assistant:
         self.body_canvas.bind('<Configure>',lambda e:self.body_canvas.itemconfigure(body_window,width=e.width))
         root.bind('<MouseWheel>',lambda e:self.body_canvas.yview_scroll(-int(e.delta/120),'units') if not isinstance(e.widget,(tk.Text,ttk.Combobox,ttk.Spinbox)) else None)
         content=tk.Frame(outer,bg=BG);content.pack(fill='both',expand=True,padx=20,pady=(16,12));outer=content
-        tk.Label(outer,text='EPIC SEVEN  /  ONE ASSISTANT',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
+        tk.Label(outer,text='第七史诗 / 统一推进助手',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
         tk.Label(outer,text='统一推进助手',bg=BG,fg=INK,font=('Microsoft YaHei UI',22,'bold')).pack(anchor='w',pady=(4,2))
         tk.Label(outer,text='双端适配 · 剧情 / 深渊 / 圣女3-7 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
@@ -135,7 +136,7 @@ class Assistant:
             self.settings['mumu'].update({k:cfg[k] for k in ('adb','serial','package') if k in cfg})
             save_settings(self.settings);self.mode='idle'
             self.status.set('已关联原进度 '+str(len(state['completed']))+' 关；任务未启动，原记录未修改。');self.update_note();self.update_buttons();self.scan()
-        except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.update_buttons()
+        except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.update_buttons()
     def current_settings(self):
         value=dict(self.settings);value.pop('limit',None)
         value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input='messages',start_policy='current_screen',fast_mode=True,observe=self.read_only)
@@ -215,7 +216,7 @@ class Assistant:
                 r=subprocess.run([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--discover',str(settings_path)],capture_output=True,text=True,encoding='utf-8',timeout=25,creationflags=subprocess.CREATE_NO_WINDOW)
                 if r.returncode:raise ValueError(r.stderr.strip()[-500:])
                 self.events.put(('targets',json.loads(r.stdout)))
-            except Exception as exc:self.events.put(('scan_error',str(exc)))
+            except Exception as exc:self.events.put(('scan_error',error_text(exc)))
         threading.Thread(target=work,daemon=True).start()
     def start(self):
         if self.process and self.process.poll() is None:
@@ -243,7 +244,7 @@ class Assistant:
                         except ValueError:self.events.put(('log',line.strip()))
                 self.events.put(('exit',child.pid))
             threading.Thread(target=reader,daemon=True).start()
-        except Exception as exc:self.mode='blocked';self.status.set(str(exc));self.log(str(exc));self.update_buttons()
+        except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
     def command(self,action):
         if self.run_dir:atomic_json(self.run_dir/'control.json',{'run_id':self.run_id,'action':action,'command_id':uuid.uuid4().hex})
     def pause(self):
@@ -288,7 +289,7 @@ class Assistant:
             if self.pending_restart and not self.closing and (self.process is None or self.process.poll() is not None):
                 task=self.pending_restart;self.pending_restart=None
                 self.task.set(next(k for k,v in TASKS.items() if v==task));self.mode='idle';self.start()
-        except Exception as exc:self.log('维护指令未执行：'+str(exc))
+        except Exception as exc:self.log('维护指令未执行：'+error_text(exc))
         if self.started and self.process and self.process.poll() is None:
             seconds=int(time.monotonic()-self.started);self.elapsed.set(f'{seconds//60:02d}:{seconds%60:02d}')
             if self.mode not in ('paused','attention') and time.monotonic()-self.last_heartbeat>65:
@@ -313,7 +314,7 @@ class Assistant:
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7'));args=ap.parse_args()
+    ap=ChineseArgumentParser();ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7'));args=ap.parse_args()
     locks=[]
     if not args.ui_check:
         kernel=ctypes.WinDLL('kernel32',use_last_error=True);kernel.CreateMutexW.argtypes=[ctypes.c_void_p,ctypes.c_bool,ctypes.c_wchar_p];kernel.CreateMutexW.restype=ctypes.c_void_p

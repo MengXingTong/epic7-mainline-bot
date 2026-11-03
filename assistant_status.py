@@ -1,5 +1,6 @@
 """Presentation-only activity states. Never infer gameplay from process existence."""
 from dataclasses import dataclass
+from ui_text import scene_name
 
 @dataclass(frozen=True)
 class Activity:
@@ -38,4 +39,4 @@ def scene_caption(values):
     stage=values.get('stage','')
     if values.get('story_mode')=='farm' and stage:
         return f"{stage} · 已成功 {values.get('farm_runs',0)} 次"
-    return values.get('scene','—')
+    return scene_name(values.get('scene','—'))

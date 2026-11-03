@@ -3,9 +3,10 @@ import unittest
 from unittest.mock import Mock,patch
 try:
     import tkinter as tk
-    from assistant_app import Assistant
 except ImportError:
     tk=None
+else:
+    from assistant_app import Assistant
 
 @unittest.skipIf(tk is None,'GUI runtime (Tk) required; run this file with GUI Python')
 class GuiActivityTests(unittest.TestCase):
@@ -127,3 +128,18 @@ class GuiActivityTests(unittest.TestCase):
         self.worker('run');self.app.read_only=False
         self.app.events.put(('worker',{'kind':'status','run_id':'test','mode':'run','status':'本轮自动战斗中','scene':'battle','stage':'3-7','story_mode':'farm','farm_runs':2}))
         self.app.pump();self.assertEqual(self.app.scene.get(),'3-7 · 已成功 2 次');self.assertEqual(self.app.mode,'run')
+
+    def test_raw_scene_code_is_displayed_in_chinese(self):
+        self.worker('run')
+        self.app.events.put(('worker', {'kind': 'status', 'run_id': 'test', 'mode': 'run',
+                                       'status': '正在推进', 'scene': 'battle'}))
+        self.app.pump()
+        self.assertEqual(self.app.scene.get(), '自动战斗中')
+
+    def test_header_uses_chinese_product_name(self):
+        def labels(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Label):
+                    yield child.cget('text')
+                yield from labels(child)
+        self.assertIn('第七史诗 / 统一推进助手', list(labels(self.root)))

@@ -83,7 +83,7 @@
 离线测试不产生游戏输入：
 
 ```powershell
-py -3.12 -B -X utf8 -m unittest discover -s tests -v
+py -3.12 -B -X utf8 run_offline_tests.py -v
 ```
 
 真实素材不分发。`EPIC7_PRIVATE_FIXTURES`、`EPIC7_PC_FIXTURES`、`EPIC7_ABYSS_FIXTURES` 可指向各自的私有回归目录；缺少素材时明确跳过，不当作通过。工作运行库路径沿用已有 `.local/python-path.txt`；GUI需包含Tkinter的本机Python，可用 `EPIC7_GUI_PYTHON` 指定。

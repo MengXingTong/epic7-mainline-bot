@@ -1,9 +1,11 @@
 """Safe local launcher. No gameplay input unless start is explicitly confirmed."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys
+import json, os, shutil, subprocess, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT))
 sys.path.insert(0,str(ROOT/'vendor'))
+from ui_text import ChineseArgumentParser,error_text,scene_name
 for stream in (sys.stdout,sys.stderr):
     if hasattr(stream,'reconfigure'): stream.reconfigure(encoding='utf-8',errors='replace')
 
@@ -44,7 +46,7 @@ def find_adb(configured=''):
 
 def adb(cfg,*args):
     p=subprocess.run([cfg['adb'],*map(str,args)],capture_output=True,timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
-    if p.returncode: raise RuntimeError(p.stderr.decode('utf8',errors='replace') or 'ADB failed')
+    if p.returncode: raise RuntimeError(p.stderr.decode('utf8',errors='replace') or '模拟器调试命令执行失败。')
     return p.stdout.decode('utf8',errors='replace')
 
 def setup():
@@ -69,7 +71,7 @@ def preview():
     setup()
     from runner import Runner,classify
     r=Runner();f=r.capture();mode=classify(f)
-    print('当前画面识别：',mode)
+    print('当前画面识别：',scene_name(mode))
     print('预览已保存在 latest.png 和 latest-ocr.json；本检查没有发送点击或按键。')
     if mode not in ('lobby','map','support','team'):
         raise RuntimeError('请先进入大厅或主线/准备界面。未知弹窗、网络错误和其他页面不会直接开刷。')
@@ -86,16 +88,16 @@ def self_test():
     if not results:raise RuntimeError('OCR模型自检失败')
     words=[([[600,300],[1100,300],[1100,350],[600,350]],'是否使用道具兑换体力',.999)]
     if classify(Frame(np.zeros((900,1600,3),np.uint8),words))!='resource_stop':raise RuntimeError('资源拦截自检失败')
-    print('SELFTEST PASS: Python, OpenCV, NumPy, ONNX OCR and resource veto.')
-    print('Python:',sys.version.split()[0]);print('Executable:',sys.executable)
-    print('OCR module:',__import__('rapidocr_onnxruntime').__file__)
-    print('OCR result:',[x[1] for x in results])
+    print('自检通过：运行库、图像处理、文字识别和资源消耗拦截检查正常。')
+    print('运行库版本：',sys.version.split()[0]);print('解释器路径：',sys.executable)
+    print('文字识别模块：',__import__('rapidocr_onnxruntime').__file__)
+    print('文字识别结果：',[x[1] for x in results])
     return 0
 
 def spawn_supervisor():
     with (ROOT/'launcher.log').open('a',encoding='utf8') as out:
         p=subprocess.Popen([sys.executable,'-B','-X','utf8',str(ROOT/'supervisor.py')],cwd=str(ROOT),stdout=out,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
-    print('已请求后台启动，PID',p.pid,'；请查看STATUS.md。重复启动有进程锁保护。')
+    print('已请求后台启动，进程编号：',p.pid,'；请查看STATUS.md。重复启动有进程锁保护。')
 
 def resume_checked():
     setup()
@@ -104,7 +106,7 @@ def resume_checked():
     if not old or not old.get('terminal'):raise RuntimeError('没有已停止的运行记录；首次用start，运行中不要重复续跑。')
     print('续跑保留所有入场/通关记录，不会清空记录。')
     print('若曾战败或中途停止，先手动完成该关，并在主线地图选中这一个带绿色通关勾的节点。')
-    if input('确认检查并续跑请输入 RESUME：').strip()!='RESUME':print('已取消。');return 0
+    if input('确认检查并续跑请输入“继续”：').strip() not in ('继续','RESUME'):print('已取消。');return 0
     r=Runner();f=r.capture();mode=classify(f)
     if mode not in ('lobby','map','support','team'):raise RuntimeError('当前画面不是可安全续跑的大厅/地图/准备页，保持停止。')
     active=r.s.get('active')
@@ -121,11 +123,11 @@ def resume_checked():
     r.save();event('local_user_resume',preserved_all_progress=True);spawn_supervisor();return 0
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('command',choices=['check','start','stop','resume','selftest']);args=ap.parse_args()
+    ap=ChineseArgumentParser();ap.add_argument('command',choices=['check','start','stop','resume','selftest']);args=ap.parse_args()
     if args.command=='selftest':return self_test()
     if args.command=='resume':return resume_checked()
     if args.command=='stop':
-        (ROOT/'STOP').write_text('Requested by local user',encoding='utf8')
+        (ROOT/'STOP').write_text('本机用户请求停止',encoding='utf8')
         print('已请求停止。当前动作结束后停止输入，不关闭游戏。');return 0
     if (ROOT/'STOP').exists():raise RuntimeError('STOP标记存在，保持停止。不要通过删除进度记录强行重试；先检查状态和关卡。')
     if (ROOT/'state.json').exists():
@@ -135,9 +137,9 @@ def main():
     if args.command=='check':return 0
     print('\n将操作当前MuMu账号，消耗正常入场体力。不会兑换体力或付费续战。')
     print('请确认latest.png是正确账号和界面。不要同时手动操作，也不要跨账号共用此目录。')
-    if input('确认启动请输入 START：').strip()!='START':print('已取消，未启动。');return 0
+    if input('确认启动请输入“开始”：').strip() not in ('开始','START'):print('已取消，未启动。');return 0
     spawn_supervisor()
     return 0
 if __name__=='__main__':
     try:raise SystemExit(main())
-    except Exception as e:print('\n停止：'+str(e),file=sys.stderr);raise SystemExit(1)
+    except Exception as e:print('\n停止：'+error_text(e),file=sys.stderr);raise SystemExit(1)

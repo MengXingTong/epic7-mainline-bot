@@ -209,9 +209,9 @@ class StoryController:
         self.r.s.pop('story_waiting_resource',None)
         if not auto_enabled(f):
             auto=f.find(r'^AUTO$',(880,625,1100,730))
-            if not auto:return self.wait('无法识别AUTO开关','保留当前队伍，未开始战斗。')
+            if not auto:return self.wait('无法识别自动战斗开关','保留当前队伍，未开始战斗。')
             return self.act('开启剧情关卡原生自动战斗',auto)
-        intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),proof='当前准备页精确关卡编号+体力+AUTO',evidence=self.r.evidence('story-entry-'+stage['id']))
+        intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),proof='当前准备页精确关卡编号、体力与自动战斗开关',evidence=self.r.evidence('story-entry-'+stage['id']))
         self.book['attempted'][intent['id']]=copy.deepcopy(intent);self.book['active']=intent
         self.r.save()  # Persist full per-run intent BEFORE the only entry click.
         self.entry_wait_until=time.monotonic()+15;self.ticket=None
@@ -323,7 +323,7 @@ class StoryController:
             if active and mode=='legacy_story_exit':
                 if not active.get('exit_seen'):active.update(exit_seen=time.time(),exit_evidence=self.r.evidence('story-exit-'+active['stage']));self.r.save()
             if target:return self.act('越过蓝色出口前往下一区域',xy=(target['x'],target['y']))
-            return self.act('关闭CLEAR胜利遮罩，继续读取出口或结算',xy=(800,820))
+            return self.act('关闭胜利遮罩，继续读取出口或结算',xy=(800,820))
         if mode in ('story','skip_confirm') and active and not active.get('story_seen'):
             active['story_seen']=time.time();self.r.save()
         if mode=='settlement':

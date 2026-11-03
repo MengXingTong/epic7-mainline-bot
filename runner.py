@@ -2,11 +2,12 @@
 Every paid entry requires a fresh, positively verified uncleared map node.
 """
 from __future__ import annotations
-import argparse, datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback, tempfile
+import  datetime as dt, difflib, json, os, re, subprocess, sys, time, traceback, tempfile
 from pathlib import Path
 CODE_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_ROOT))
 sys.path.insert(0, str(CODE_ROOT / 'vendor'))
+from ui_text import ChineseArgumentParser,error_text,scene_name
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash,account_upgrade_notice_close
@@ -29,7 +30,7 @@ def atomic_json(path, value):
 def write_status_report(path,text):
     """Best-effort display report only; never use this for progress/evidence writes."""
     path=Path(path)
-    if path.name!='STATUS.md':raise ValueError('Best-effort writer is limited to STATUS.md')
+    if path.name!='STATUS.md':raise ValueError('允许暂缓写入的仅为状态展示报告；关键记录不适用。')
     temporary=None
     try:
         with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.STATUS-',suffix='.tmp',delete=False) as stream:
@@ -38,7 +39,7 @@ def write_status_report(path,text):
         return ''
     except OSError as exc:
         winerror=getattr(exc,'winerror',None)
-        code=('WinError '+str(winerror)) if winerror is not None else ('errno '+str(exc.errno) if exc.errno is not None else type(exc).__name__)
+        code=('系统错误 '+str(winerror)) if winerror is not None else ('错误码 '+str(exc.errno) if exc.errno is not None else type(exc).__name__)
         return '状态报告暂时无法更新（'+code+'）；关键进度已保存，以软件界面和 state.json 为准。'
     finally:
         # Only this call's newly-created temporary file, never a destination/history file.
@@ -167,19 +168,19 @@ class Runner:
     def __init__(self,observe=False):
         self.cfg=json.loads(config_path().read_text(encoding='utf-8-sig'))
         if self.cfg.get('backend','mumu_adb') not in ('mumu_adb','stove_pc'):
-            raise RuntimeError('Unknown backend; no input allowed')
+            raise RuntimeError('未知的输入后端；禁止发送输入。')
         self.pc=None
         if self.cfg.get('backend')=='stove_pc':
             from pc_backend import PcBackend
             if not (ROOT/'state.json').is_file():
-                raise RuntimeError('PC requires an explicitly selected existing profile state; no empty history created')
+                raise RuntimeError('桌面端需要明确选择已有进度记录；不会创建空历史。')
             self.pc=PcBackend(self.cfg['pc'],ROOT/'STOP')
             if not observe:self.pc.authorize(self.cfg.get('pc_preflight',{}))
         self.s=json.loads((ROOT/'state.json').read_text(encoding='utf8')) if (ROOT/'state.json').exists() else {'schema':1,'started_at':now(),'completed':{},'attempted':{},'active':None,'victories':0}
         if self.pc and not observe:
             binding=self.s.get('pc_profile_binding') or {}
             if any(str(binding.get(k,''))!=str(self.cfg['pc'].get(k,'')) for k in ('server','account_id')):
-                raise RuntimeError('PC history has no matching account/server binding; use the explicit PC launcher')
+                raise RuntimeError('旧版桌面端历史缺少匹配的账号或服务器绑定；请使用对应的桌面端启动器。')
         self.ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
         self.ticket=None; self.last_mode=None; self.mode_since=time.time(); self.battle_seen=0; self.last_gesture=0; self.last_stamina=None; self.unknown_gestures=0
     def adb(self,*args,timeout=25):
@@ -192,10 +193,10 @@ class Runner:
         else:
             png=self.adb('exec-out','screencap','-p')
             raw=cv2.imdecode(np.frombuffer(png,np.uint8),cv2.IMREAD_COLOR)
-        if raw is None: raise RuntimeError('Invalid Android screenshot')
+        if raw is None: raise RuntimeError('模拟器截图无效。')
         h,w=raw.shape[:2]
-        if w<h: raise RuntimeError('Unexpected portrait orientation; no inputs sent')
-        if not getattr(self,'pc',None) and abs(w/h-16/9)>.03: raise RuntimeError('Use a 16:9 landscape emulator resolution; no inputs sent')
+        if w<h: raise RuntimeError('检测到纵向画面；未发送输入。')
+        if not getattr(self,'pc',None) and abs(w/h-16/9)>.03: raise RuntimeError('请将模拟器设为 16:9 横屏分辨率；未发送输入。')
         im=cv2.resize(raw,(1600,900)) if (w,h)!=(1600,900) else raw
         results,_=self.ocr(im)
         f=Frame(im,results,(w,h))
@@ -229,13 +230,13 @@ class Runner:
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf8',errors='replace')
         resumed=[line for line in activity.splitlines() if 'topResumedActivity' in line or 'mResumedActivity' in line]
         if not any(self.cfg['package'] in line for line in resumed):
-            raise RuntimeError('Foreground Android app is not the authorized game; no input sent')
+            raise RuntimeError('模拟器前台应用不是已授权的游戏；未发送输入。')
     def action(self,kind,word=None,xy=None):
         self.ensure_game()
-        if time.time()-self.frame.at>5: raise RuntimeError('Stale observation; action cancelled')
+        if time.time()-self.frame.at>5: raise RuntimeError('观察画面已过期；已取消操作。')
         blocker=capacity_blocker(w['text'] for w in self.frame.words)
         if blocker:raise TaskAttention(blocker.code,blocker.title,blocker.reason)
-        if resource_warning(self.frame): raise RuntimeError('Resource veto immediately before input')
+        if resource_warning(self.frame): raise RuntimeError('输入前触发资源消耗保护，已拒绝操作。')
         x,y=xy if xy else (word['x'],word['y'])
         w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
         self.input_sequence=getattr(self,'input_sequence',0)+1
@@ -245,8 +246,8 @@ class Runner:
         else:self.adb('shell','input','tap',*coords)
     def drag(self,why,start,end):
         self.ensure_game()
-        if time.time()-self.frame.at>5:raise RuntimeError('Stale observation; map drag cancelled')
-        if capacity_blocker(w['text'] for w in self.frame.words) or resource_warning(self.frame):raise RuntimeError('Business veto before map drag')
+        if time.time()-self.frame.at>5:raise RuntimeError('观察画面已过期；已取消地图拖动。')
+        if capacity_blocker(w['text'] for w in self.frame.words) or resource_warning(self.frame):raise RuntimeError('地图拖动前触发业务安全保护，已拒绝操作。')
         self.input_sequence=getattr(self,'input_sequence',0)+1;self.s['last_action']=why;self.save();event('drag',reason=why,start=start,end=end)
         if getattr(self,'pc',None):self.pc.drag(*start,*end)
         else:
@@ -308,7 +309,7 @@ class Runner:
             self.mode_since=time.time(); self.unknown_gestures=0; self.last_mode=mode
             event('screen',screen=mode,stage=(self.s.get('active') or self.ticket or {}).get('key'))
         age=time.time()-self.mode_since
-        self.s.update(status='正在推进主线',reason=f'已识别画面：{mode}',terminal=False)
+        self.s.update(status='正在推进主线',reason='已识别画面：'+scene_name(mode),terminal=False)
         if (ROOT/'STOP').exists(): return self.stop('用户停止','检测到 STOP 文件；未关闭游戏')
         if mode=='network_error':
             retries=[x for x in self.s.get('network_retries',[]) if time.time()-x<600]
@@ -359,7 +360,7 @@ class Runner:
         if mode=='account_upgrade_notice':
             self.action('关闭免费账号升级行动力上限提示',account_upgrade_notice_close(f.words));return True,3
         if mode=='rankup_splash':
-            self.action('关闭免费Rank升级全屏提示',xy=(800,872));return True,3
+            self.action('关闭免费等级提升全屏提示',xy=(800,872));return True,3
         if mode=='rankup':
             self.action('关闭等级提升提示',f.find(r'^(确认|确定|確定|確認)$')); return True,3
         if mode=='lobby':
@@ -367,7 +368,7 @@ class Runner:
             if self.s.get('active'):
                 if self.cfg.get('start_policy')=='current_screen':self.archive_unresolved_active('当前已在大厅；不回查旧关')
                 else:return self.stop('安全暂停待修复','未见结算即返回大厅；保留已尝试记录，不重新开同一关')
-            self.action('大厅进入Episode',f.find(r'^Episode$',(1300,120,1599,330))); return True,4
+            self.action('从大厅进入主线章节',f.find(r'^Episode$',(1300,120,1599,330))); return True,4
         if mode=='map':
             d,rows,proof=self.map_ticket(f)
             if not d:
@@ -472,7 +473,7 @@ class Runner:
         self.save(); return True,4
     def run(self,once=False,observe=False):
         if self.s.get('terminal') and not observe:
-            print('Terminal state retained; inspect STATUS.md. Resume requires explicit repair/resume.',flush=True); return
+            print('保留停止状态；请查看状态报告。处理原因后，需明确执行续跑命令。',flush=True); return
         errors=0
         while True:
             try:
@@ -488,10 +489,10 @@ class Runner:
             except Exception as exc:
                 errors+=1; event('error',error=str(exc),trace=traceback.format_exc())
                 if getattr(self,'pc',None):
-                    self.s.update(status='PC安全暂停',reason=str(exc),terminal=True);self.save();return
-                self.s.update(status='异常重连中',reason=str(exc)); self.save()
+                    self.s.update(status='PC安全暂停',reason=error_text(exc),terminal=True);self.save();return
+                self.s.update(status='异常重连中',reason=error_text(exc)); self.save()
                 if errors>=3:
-                    self.s.update(status='安全暂停待修复',reason=f'连续三次异常：{exc}',terminal=True); self.save(); return
+                    self.s.update(status='安全暂停待修复',reason='连续三次异常：'+error_text(exc),terminal=True); self.save(); return
                 time.sleep(5)
                 try: subprocess.run([self.cfg['adb'],'connect',self.cfg['serial']],capture_output=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
                 except Exception: pass
@@ -503,10 +504,10 @@ def record_pc_startup_failure(exc):
         cfg=json.loads(config_path().read_text(encoding='utf-8-sig'))
         if cfg.get('backend')!='stove_pc':return False
         state=json.loads((ROOT/'state.json').read_text(encoding='utf8'))
-        state.update(terminal=True,status='PC启动安全暂停',reason=str(exc),updated_at=now())
+        state.update(terminal=True,status='PC启动安全暂停',reason=error_text(exc),updated_at=now())
         atomic_json(ROOT/'state.json',state)
         active=state.get('active') or state.get('last_cleared') or {}
-        text=(f"# 第七史诗主线运行状态\n\n- 状态：**PC启动安全暂停**\n- 更新时间：{state['updated_at']}\n- 当前/最近关卡：{active.get('key','未识别')}\n- 本次已确认通关：{len(state.get('completed',{}))}\n- 说明：{exc}\n\n启动未完成，不发送输入；全部原始入场/通关记录保留。\n")
+        text=(f"# 第七史诗主线运行状态\n\n- 状态：**PC启动安全暂停**\n- 更新时间：{state['updated_at']}\n- 当前/最近关卡：{active.get('key','未识别')}\n- 本次已确认通关：{len(state.get('completed',{}))}\n- 说明：{error_text(exc)}\n\n启动未完成，不发送输入；全部原始入场/通关记录保留。\n")
         warning=write_status_report(ROOT/'STATUS.md',text)
         if warning:print(json.dumps({'kind':'log','text':warning},ensure_ascii=False),flush=True)
         event('pc_startup_stop',error=str(exc),preserved_all_history=True)
@@ -515,18 +516,18 @@ def record_pc_startup_failure(exc):
 
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('--observe',action='store_true'); parser.add_argument('--step',action='store_true'); args=parser.parse_args()
+    parser=ChineseArgumentParser(); parser.add_argument('--observe',action='store_true'); parser.add_argument('--step',action='store_true'); args=parser.parse_args()
     import msvcrt
     lock=(ROOT/'worker.lock').open('a+b')
     if lock.seek(0,os.SEEK_END)==0: lock.write(b'0'); lock.flush()
     lock.seek(0)
     try: msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
-    except OSError: print('Worker already running; no second runner created.'); return
+    except OSError: print('工作进程已在运行；未启动第二个执行进程。'); return
     try:
         try:Runner(observe=args.observe).run(once=args.step,observe=args.observe)
         except Exception as exc:
             if args.observe or not record_pc_startup_failure(exc):raise
-            print('PC startup safely stopped: '+str(exc),flush=True);return 1
+            print('桌面端启动已安全停止：'+error_text(exc),flush=True);return 1
     finally: lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1); lock.close()
 if __name__=='__main__': raise SystemExit(main())
 
