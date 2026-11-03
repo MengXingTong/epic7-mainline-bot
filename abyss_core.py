@@ -154,8 +154,9 @@ def classify(o,normal_verified=False):
         return Reading(Scene.TEAM,("准备战斗","深渊","战斗开始"),o.selected_floor((.70,.08,.99,.25)))
     if o.find("战斗",region=(.86,.34,.99,.57)) and o.find("召唤",region=(.86,.53,.99,.76)) and o.find("商店",region=(.86,.65,.99,.87)):
         return Reading(Scene.LOBBY,("右侧战斗/召唤/商店导航",))
-    if normal_verified and ("battle-pause" in o.visuals or o.has("战斗暂停按钮")):
-        return Reading(Scene.BATTLE,('战斗界面',"普通深渊上下文"))
+    # Recognizing a running battle only authorizes waiting, not entry or skills.
+    if "battle-pause" in o.visuals or o.has("战斗暂停按钮"):
+        return Reading(Scene.BATTLE,("战斗暂停控件",))
     if o.has("victory","战斗胜利"): return Reading(Scene.VICTORY,("胜利过场",))
     return Reading(Scene.UNKNOWN)
 
@@ -248,7 +249,7 @@ class Session:
             return self._action("普通深渊开战",o.find("战斗开始",region=(.76,.83,.99,.99)),
                                 f"start:{self.expected_floor}",scene,kind="start_battle",target_floor=self.expected_floor)
         if scene==Scene.BATTLE:
-            self.require_normal()
+            # Start may attach mid-battle; keep floor/entry provenance unchanged.
             self.phase="battle"
             return None
         return None  # Unknown/transient pages never receive clicks.

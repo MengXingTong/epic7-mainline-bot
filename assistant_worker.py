@@ -138,7 +138,7 @@ def abyss_run(request,control):
     key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
     if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
-    previous=None;stable=0;cooldown=0;cooldown_scene=None;unknown=None
+    previous=None;stable=0;cooldown=0;cooldown_scene=None
     while True:
         try:
             control.check();snap=capture_fresh(transport.capture,control);image=snap.image
@@ -151,7 +151,12 @@ def abyss_run(request,control):
             reading=classify(obs,session.normal_verified or settings['observe'])
             floor_text=f' · 第{reading.floor}层' if reading.floor else ''
             control.preview(image)
-            control.status('只读观察，不发送点击' if settings['observe'] else '普通深渊推进中',mode='observe' if settings['observe'] else 'run',scene=reading.scene.value+floor_text,wins=session.wins,expected_floor=session.expected_floor)
+            if settings['observe']:status='只读观察，不发送点击'
+            elif reading.scene==Scene.BATTLE:status='正在自动战斗，等待结算。'
+            elif reading.scene in (Scene.VICTORY,Scene.RESULT):status='等待独立结算画面，不重复入场。'
+            elif reading.scene==Scene.UNKNOWN:status='正在识别当前画面，暂不操作。'
+            else:status='普通深渊推进中'
+            control.status(status,mode='observe' if settings['observe'] else 'run',scene=reading.scene.value+floor_text,wins=session.wins,expected_floor=session.expected_floor)
             signature=(reading.scene,reading.floor,reading.available_floor)
             stable=stable+1 if previous==signature else 1
             if previous!=signature:control.log('识别：'+scene_name(reading.scene)+floor_text)
@@ -159,15 +164,11 @@ def abyss_run(request,control):
             if settings['observe']:
                 if request.get('once'):return
                 control.sleep(1);continue
-            if session.battle_started_at and time.monotonic()-session.battle_started_at>1200:raise PauseRequired('单场超过20分钟，停止等待确认。')
             if reading.scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED,Scene.CAPACITY):session.plan(reading,obs)
             if reading.scene==Scene.UNKNOWN:
-                if session.phase in ('battle_opening','battle') and session.battle_started_at:
-                    control.status('等待原生自动战斗或过场；不点击技能。');control.sleep(1);continue
-                unknown=unknown or time.monotonic()
-                if time.monotonic()-unknown>15:raise PauseRequired('界面连续15秒无法确认，不猜测按钮。')
+                # No input is pending. Keep observing instead of treating OCR gaps
+                # or long animations as a hung game; Stop/target guards still apply.
                 control.sleep(1);continue
-            unknown=None
             if stable<2 or (reading.scene==cooldown_scene and time.monotonic()<cooldown):control.sleep(.4);continue
             if reading.scene==Scene.CLEAR and reading.floor is not None:
                 ledger['completed'].setdefault(str(reading.floor),{'observed_clear_at':time.time()})
@@ -190,7 +191,7 @@ def abyss_run(request,control):
                 session.applied(action);control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
             control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
         except TaskAttention as exc:
-            control.attention(exc);previous=None;stable=0;cooldown=0;unknown=None
+            control.attention(exc);previous=None;stable=0;cooldown=0
         except PauseRun:control.paused();previous=None;stable=0
 
 

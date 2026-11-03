@@ -43,10 +43,10 @@ class RealFrameTests(unittest.TestCase):
         self.assertEqual(r.scene,Scene.TEAM)
         s=Session(normal_verified=True,entered_floor=52,expected_floor=52,phase='team_opening')
         self.assertEqual(s.plan(r,o).kind,'start_battle')
-    def test_real_hud_needs_context(self):
+    def test_real_hud_can_be_observed_without_entry_context(self):
         o=frame('battle-052')
         self.assertEqual(classify(o,True).scene,Scene.BATTLE)
-        self.assertEqual(classify(o,False).scene,Scene.UNKNOWN)
+        self.assertEqual(classify(o,False).scene,Scene.BATTLE)
     def test_held_out_clear_052(self):
         r=classify(frame('clear-052'));self.assertEqual((r.scene,r.floor),(Scene.CLEAR,52))
     def test_existing_clear_is_a_baseline_not_a_win(self):
