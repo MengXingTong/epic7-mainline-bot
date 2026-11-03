@@ -338,7 +338,7 @@ def main():
             app.start()
         root.after(800,start_selected_once)
     if args.ui_exercise:
-        app.read_only=True;app.task.set('普通深渊');app.client.set('PC 桌面端');app.update_buttons()
+        app.read_only=True;app.task.set('普通深渊');app.client.set(next(k for k,v in CLIENTS.items() if v=='pc'));app.update_buttons()
         phase=[0];deadline=time.monotonic()+50
         def exercise():
             if phase[0]==0 and app.filtered:
