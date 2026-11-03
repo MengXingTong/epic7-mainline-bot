@@ -1,6 +1,8 @@
 """Source-package dependency installer: direct first, proxy fallback only on failure."""
 from pathlib import Path
 import os,subprocess,sys
+for stream in (sys.stdout,sys.stderr):
+    if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8',errors='replace')
 root=Path(__file__).resolve().parent
 if sys.version_info[:2]!=(3,12):raise SystemExit('本项目需要使用 Python 3.12 64 位运行库。')
 base=[sys.executable,'-m','pip','install','--disable-pip-version-check','--only-binary=:all:','--target',str(root/'vendor'),'-r',str(root/'requirements.txt')]

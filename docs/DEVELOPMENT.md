@@ -9,11 +9,11 @@
 需要 Windows x64 和 Python 3.12。安装器先直连获取依赖，失败后才回退原代理配置，不改变全局代理。
 
 ```powershell
-py -3.12 install_dependencies.py
+py -3.12 -B -X utf8 install_dependencies.py
 py -3.12 -B -X utf8 run_offline_tests.py -v
 ```
 
-统一测试入口会在发现测试前将仓库根目录和 `vendor` 加入模块搜索路径，避免依赖已安装却因导入顺序找不到 `PIL`。GitHub Actions 设置 `EPIC7_REQUIRE_GUI_TESTS=1`，预先验证 Pillow、Tk 和统一界面导入；依赖异常直接失败，不得伪装成界面测试跳过。这个工作流只做离线验证，不会生成或上传便携包。
+统一测试入口会在发现测试前将仓库根目录和 `vendor` 加入模块搜索路径，避免依赖已安装却因导入顺序找不到 `PIL`。GitHub Actions 设置 `EPIC7_REQUIRE_GUI_TESTS=1`，预先验证 Pillow、Tk 和统一界面导入；依赖异常直接失败，不得伪装成界面测试跳过。CI 的安装、测试和子进程日志统一使用 UTF-8，避免 Windows 重定向输出默认编码无法打印中文。这个工作流只做离线验证，不会生成或上传便携包。
 
 公开源码不分发真实账号截图素材，因此相关用例会明确标记 skipped。本机完整回归可通过环境变量 `EPIC7_PRIVATE_FIXTURES` 指向自己的私有素材目录。不要把该目录或变量的个人绝对路径提交到仓库。
 
