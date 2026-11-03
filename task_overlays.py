@@ -28,3 +28,25 @@ def account_upgrade_notice_close(words,width=1600,height=900):
     notice=bool(re.search(r'账号(?:升等|升级)',caption) and '行动力上限已提升' in caption)
     close=[word for text,x,y,word in confident if text=='点击关闭' and .3<x<.7 and .5<y<.94]
     return close[0] if heading and notice and len(close)==1 else None
+
+
+FRIENDSHIP_TITLES=('英雄亲密度等级上升','英雄亲密度等级提升',
+                   '英雄親密度等級上升','英雄親密度等級提升')
+
+
+def friendship_upgrade_notice_close(words,width=1600,height=900):
+    """Dismiss the free friendship notice at its current, observed close label."""
+    translate=str.maketrans({'親':'亲','級':'级','輕':'轻','觸':'触','後':'后',
+        '關':'关','閉':'闭','點':'点','擊':'击','購':'购','買':'买','兌':'兑',
+        '換':'换','復':'复','確':'确','認':'认'})
+    rows=[(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).translate(translate).casefold(),
+           w['x']/width,w['y']/height,w) for w in words]
+    if any(text in ('确认','确定','取消','failed','defeat') or any(v in text for v in
+           ('购买','兑换','复活','是否消耗','是否使用','消耗道具','使用道具','战斗失败','挑战失败'))
+           for text,x,y,word in rows):return None
+    confident=[row for row in rows if row[3].get('score',1.0)>=.8]
+    heading=any(text in ('英雄亲密度等级上升','英雄亲密度等级提升') and .25<x<.9 and .08<y<.5
+                for text,x,y,word in confident)
+    close=[word for text,x,y,word in confident if text in ('轻触后关闭','轻触关闭','点击关闭')
+           and .25<x<.9 and .5<y<.96]
+    return close[0] if heading and len(close)==1 else None

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re, time, unicodedata
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash,account_upgrade_notice_close
+from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES
 
 
 def normalize(text):
@@ -102,6 +102,7 @@ class Scene(str,Enum):
     DEFEAT="战斗失败"
     HARD="挑战模式（禁止）"
     ACCOUNT_UPGRADE="账号升级行动力上限提示"
+    FRIENDSHIP_UPGRADE="英雄亲密度提升提示"
     RANKUP="Rank升级提示"
     CAPACITY="容量不足（等待处理）"
     BLOCKED="需要人工处理"
@@ -127,15 +128,23 @@ def _account_upgrade_target(o):
     target=account_upgrade_notice_close(words,o.width,o.height)
     return target['token'] if target else None
 
+def _friendship_upgrade_target(o):
+    words=[dict(text=t.text,x=t.center[0],y=t.center[1],score=t.score if t.score is not None else 1.0,token=t) for t in o.tokens]
+    target=friendship_upgrade_notice_close(words,o.width,o.height)
+    return target['token'] if target else None
+
+
 def classify(o,normal_verified=False):
     blocker=capacity_blocker(t.text for t in o.tokens)
     if blocker:return Reading(Scene.CAPACITY,(blocker.title,blocker.reason))
+    if _friendship_upgrade_target(o) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.FRIENDSHIP_UPGRADE,('英雄亲密度等级上升','本帧关闭控件'))
     if _account_upgrade_target(o) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.ACCOUNT_UPGRADE,('升级','账号升等、行动力上限已提升','点击关闭'))
     if rankup_splash([dict(text=t.text,x=t.center[0],y=t.center[1]) for t in o.tokens],o.width,o.height) and not o.contains(*BLOCKED_PHRASES):return Reading(Scene.RANKUP,('RANK UP','免费等级提升与已恢复行动力','继续旅程'))
     if o.contains(*BLOCKED_PHRASES) or o.has("确认","确定","取消","购买","复活"):
         return Reading(Scene.BLOCKED,("资源/付费/确认弹窗",))
     if o.has("战斗失败","挑战失败","defeat","失败","重新挑战"):
         return Reading(Scene.DEFEAT,("失败或重试提示",))
+    if o.contains(*FRIENDSHIP_TITLES,'轻触后关闭','輕觸後關閉'):return Reading(Scene.BLOCKED,('亲密度提示的关闭控件尚未确认，不操作背后结算。',))
     # Menu cards include a challenge-summary label; it does NOT make the menu a hard-mode page.
     if o.has("一般") and o.has("活动") and o.has("赛季","赛事") and o.find("战斗",region=(0,0,.2,.13)):
         return Reading(Scene.BATTLE_MENU,("战斗标题","一般/赛季/活动页签"))
@@ -191,6 +200,8 @@ class Session:
 
     def plan(self,reading,o):
         scene=reading.scene
+        if scene==Scene.FRIENDSHIP_UPGRADE:
+            return self._action('关闭免费英雄亲密度提升提示',_friendship_upgrade_target(o),'friendship-upgrade-close',scene)
         if scene==Scene.ACCOUNT_UPGRADE:
             return self._action("关闭免费账号升级行动力上限提示",_account_upgrade_target(o),"account-upgrade-close",scene)
         if scene==Scene.RANKUP:

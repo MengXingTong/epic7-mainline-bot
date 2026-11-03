@@ -10,7 +10,7 @@ sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash,account_upgrade_notice_close
+from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 import copy
@@ -125,6 +125,7 @@ def classify(f):
     version_retry=(f.find(r'^无法连接至版本服务器[。.]?$',(500,150,1100,280)),f.find(r'^网络连接失败$',(550,350,1050,530)),f.find(r'^点击重试$',(500,550,1100,780)))
     if all(word and word['score']>=.90 for word in version_retry):return 'network_error'
     if paid_revive_defeat_verified(f): return 'defeat'
+    if friendship_upgrade_notice_close(f.words):return 'friendship_upgrade_notice'
     if account_upgrade_notice_close(f.words):return 'account_upgrade_notice'
     if rankup_splash(f.words):return 'rankup_splash'
     conf=f.find(r'^(确认|确定|確定|確認)$')
@@ -133,6 +134,7 @@ def classify(f):
     failure_banner=norm(''.join(w['text'] for w in f.words if 280<w['x']<1340 and 120<w['y']<640))
     if (any(norm(t) in failure_banner for t in ('FAILED','DEFEAT','战斗失败','挑战失败','闯关失败','任務失敗','任务失败'))
         or (f.any('再次挑战','重新挑战','再挑战') and not f.any('获得的道具','任务成功','闯关成功'))): return 'defeat'
+    if f.any(*FRIENDSHIP_TITLES,'轻触后关闭','輕觸後關閉'):return 'unknown_dialog'
     if f.any('给予协助的朋友') and f.any('发送好友申请') and f.find(r'^取消$',(500,570,800,720)) and f.find(r'^申请$',(800,570,1100,720)): return 'friend_decline'
     if conf and ('跳过教学' in middle or '跳过教學' in middle): return 'tutorial_skip_confirm'
     if f.find(r'^跳过教学$',(1330,0,1599,100)) and not conf:return 'tutorial_skip'
@@ -324,6 +326,8 @@ class Runner:
             return self.attention('resource','体力/入场资源不足','请手动处理后点“处理后继续”；没有确认、兑换或使用资源。')
         if mode=='defeat': return self.stop('强度不足卡关','识别到战斗失败/付费续战界面；不花费资源续战、不重新挑战，保留现场')
         if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
+        if mode=='friendship_upgrade_notice':
+            self.action('关闭免费英雄亲密度提升提示',friendship_upgrade_notice_close(f.words));return True,1
         if getattr(self,'story',None):
             result=self.story.step(f,mode)
             if result is not None:return result

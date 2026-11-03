@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.4.3-preview'
+VERSION='1.4.4-preview'
 
 
 def copy_tree(source,target):
@@ -100,13 +100,16 @@ def build_update(package):
     if archive.exists():raise ValueError('更新压缩包已存在，禁止覆盖。')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.4 修复英雄亲密度等级上升提示遮住结算：只点击本帧“轻触后关闭”，重新截图后再读取独立结算，不点击背后的下一层或把弹层当通关。
+标题或关闭控件缺失时不猜坐标；资源、付费、容量、战败和确认覆盖层优先。
 
 v1.4.3 修复从正在进行的自动战斗启动被误判停机：识别战斗后只等待结算，不要求本次助手亲自开战。
 取消深渊纯等待的15秒/20分钟停机门槛；未知画面继续取图、零输入，不把OCR空档当成游戏无响应。

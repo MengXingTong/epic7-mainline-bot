@@ -14,6 +14,7 @@ SCENE_NAMES = {
     'network_error': '网络连接异常',
     'defeat': '战斗失败',
     'account_upgrade_notice': '账号升级提示',
+    'friendship_upgrade_notice': '英雄亲密度提升提示',
     'rankup_splash': '等级提升全屏提示',
     'rankup': '等级提升提示',
     'friend_decline': '好友申请提示',
