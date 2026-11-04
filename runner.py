@@ -397,7 +397,8 @@ class Runner:
                 if d['stage']>=10:
                     self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
                 return self.stop('安全暂停待修复','当前已通关且无法可靠定位下一新关卡；未重复挑战')
-            if d['key'] in self.s['attempted'] or d['key'] in self.s['completed']:
+            from entry_journal import can_enter
+            if not can_enter(self.s,d['key']):
                 if self.cfg.get('start_policy')=='current_screen':
                     return self.attention('current_stage_unresolved','当前关未显示通关',f"{d['key']} 只有原入场/历史记录，当前画面没有明确通关标记；不当作已完成跳关、不点击后面的锁定关。处理当前关后可从所选新关继续，不回查旧关。")
                 return self.stop('安全暂停待修复',f"防重复入场：{d['key']} 已有尝试记录，不再次消耗体力")
@@ -420,7 +421,7 @@ class Runner:
                 if self.cfg.get('start_policy')=='current_screen':
                     self.archive_unresolved_active('已有入场意图，返回当前地图而非重复开战');self.ticket=None;self.back('从当前地图继续');return True,3
                 return self.stop('安全暂停待修复','已记录一次入场请求但仍在队伍页；不重复点击进行任务')
-            if not self.ticket or self.ticket.get('phase')!='support' or time.time()-self.ticket['verified_epoch']>120:
+            if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('队伍界面没有完整地图验证链'); return True,3
             if not self.title_matches(f): return self.stop('安全暂停待修复','开战前关卡名称不一致，拒绝入场')
             cost=f.find(r'\d+\s*/\s*\d+',(1180,775,1340,880))
@@ -440,12 +441,22 @@ class Runner:
                 if not auto: return self.stop('安全暂停待修复','无法确认自动战斗开关')
                 self.action('开启自动战斗',auto); return True,2
             key=self.ticket['key']
-            if key in self.s['attempted'] or key in self.s['completed']: return self.stop('安全暂停待修复','最终开战前防重检查未通过')
+            from entry_journal import can_enter,reserve_entry,finish_dispatch
+            from pc_backend import TapNotSent
+            if not can_enter(self.s,key): return self.attention('entry_history','该关已有入场记录',f'{key} 已实际开战或发送结果不明；请选择未尝试的新关后继续。')
             a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time())
-            self.s['attempted'][key]=a; self.s['active']=a
+            dispatch=reserve_entry(self.s,key,a);self.s['active']=a
             self.s['reason']=f"已验证新关 {key}，本次入场只消耗体力 {required}，绝不兑换"
             self.save() # Durable intent BEFORE the one permitted entry input.
-            self.action('进行任务（仅一次入场）',f.find('进行任务',(1300,750,1599,899))); self.ticket=None; return True,5
+            try:self.action('进行任务（仅一次入场）',f.find('进行任务',(1300,750,1599,899)))
+            except TapNotSent as exc:
+                finish_dispatch(dispatch,'not_sent',str(exc))
+                self.archive_unresolved_active('开战按下前取消，确认未发送；原入场意图与发送结果完整保留')
+                self.s.update(status='开战点击尚未发送',reason='鼠标接管时取消了点击；移出后点继续，重新核对当前关再开战。')
+                self.save()
+                raise TaskAttention('entry_not_sent',self.s['status'],self.s['reason']) from exc
+            finish_dispatch(dispatch,'sent');self.save()
+            self.ticket=None; return True,5
         if mode=='battle':
             self.battle_seen=time.time()
             a=self.s.get('active')

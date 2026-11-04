@@ -63,7 +63,7 @@ class Assistant:
         tk.Label(outer,text='双端适配 · 剧情 / 深渊 / 圣女3-7 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
         connection.columnconfigure(1,weight=1)
-        self.client=tk.StringVar(value=next(k for k,v in CLIENTS.items() if v==self.settings.get('client','auto')))
+        self.client=tk.StringVar(value='自动识别')
         self.task=tk.StringVar(value=next(k for k,v in TASKS.items() if v==self.settings.get('task','mainline')))
         self.instance=tk.StringVar(value='正在检测客户端…')
         self.client_box=self.combo(connection,'客户端',self.client,list(CLIENTS),0)
@@ -94,7 +94,7 @@ class Assistant:
         options=self.card(outer)
         self.run_policy=tk.Label(options,text='持续推进 · 不设次数上限',bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'))
         self.run_policy.pack(anchor='w')
-        tk.Label(self.footer,text='开始即按当前队伍推进 · 不购买、不复活、不重试 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
+        tk.Label(self.footer,text='开始即按当前队伍推进 · 不购买、不复活、不重试关卡 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
         tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7).pack(fill='x',pady=(9,0))
         actions=tk.Frame(self.footer,bg=BG);actions.pack(fill='x')
         self.start_button=self.button(actions,'开始推进',self.start,GREEN,'white');self.start_button.pack(side='left',fill='x',expand=True,padx=(0,8))
@@ -155,7 +155,7 @@ class Assistant:
         if client=='mumu':
             text='MuMu 使用 ADB，不占电脑鼠标和焦点；模拟器内需保持游戏打开。'
             if TASKS[self.task.get()]=='abyss':text+=' MuMu深渊尚未实机验收，无法确认界面时停止。'
-        else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化。'
+        else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化；鼠标移入游戏时让行，移出后继续。'
         if not self.settings.get('data_dir'):
             text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
         elif TASKS[self.task.get()] in ('mainline','saint_3_7'):
@@ -170,11 +170,11 @@ class Assistant:
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
         label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
-        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
+        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
         self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) else 'normal')
-        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering') else 'disabled')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
     def update_activity(self):
@@ -196,7 +196,8 @@ class Assistant:
         if alive:
             age=int(time.monotonic()-self.last_heartbeat)
             text=('工作进程已暂停，等待手动处理' if self.mode in ('paused','attention') else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
-            if age>15 and self.mode not in ('paused','attention'):text+='  · 仍在等待响应，不代表已卡死'
+            if self.mode=='waiting_input':text='输入空闲后自动继续，不需要重新开始  |  本次用时 '+self.elapsed.get()
+            elif age>15 and self.mode not in ('paused','attention'):text+='  · 仍在等待响应，不代表已卡死'
         else:text='任务没有运行。点击开始才会启动；说明文字不代表任务已开始。'
         self.activity_meta.configure(text=text)
 

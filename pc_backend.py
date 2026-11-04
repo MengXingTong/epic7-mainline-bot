@@ -13,6 +13,15 @@ import numpy as np
 class PcSafetyError(RuntimeError):
     pass
 
+class InputBusy(PcSafetyError):
+    """Physical input owns the client; no new synthetic press was sent."""
+
+class InputDeliveryError(PcSafetyError):
+    """Delivery failed or is uncertain. Preserve intent; never replay an entry."""
+
+class TapNotSent(InputBusy):
+    """A tap was cancelled before its button-down; no entry input was sent."""
+
 @dataclass(frozen=True)
 class WindowSnapshot:
     hwnd: int
@@ -40,6 +49,7 @@ class PcBackend:
         self.window=None;self.frame_window=None;self.frame_at=None
         self.allowed=False
         self.navigation_digest=None
+        self.frame_viewport=None
 
     def _stop_check(self):
         if self.stop_path.exists():raise PcSafetyError('检测到停止标记；已禁用桌面端输入。')
@@ -52,11 +62,13 @@ class PcBackend:
         if current.width<640 or current.height<360:raise PcSafetyError('桌面端游戏客户区过小，请放大窗口。')
         ratio=current.width/current.height
         if not 1.4<=ratio<=2.4:raise PcSafetyError('不支持当前桌面端游戏客户区的宽高比。')
-        if abs(ratio-16/9)>.03 and not self.cfg.get('allow_stretched_client',False):
+        if abs(ratio-16/9)>.03 and self.cfg.get('viewport_mode')!='auto' and not self.cfg.get('allow_stretched_client',False):
             raise PcSafetyError('非 16:9 客户区需先在本机验证，并明确启用拉伸客户区配置。')
         if self.window is not None and current.identity()!=self.window.identity():
-            raise PcSafetyError('桌面端游戏进程或窗口已变化；旧版启动流程需要重新核验账号。')
-        if not self.api.ready(current):raise PcSafetyError('桌面端游戏已失焦、最小化、被遮挡或位于屏幕外。')
+            raise PcSafetyError('桌面端游戏进程或窗口已变化；请停止并重选实例。')
+        if not self.api.ready(current):
+            reason=getattr(self.api,'last_unready_reason','') or '窗口未满足当前输入方式的可用条件'
+            raise PcSafetyError('桌面端窗口暂不可用：'+reason+'。')
         self.window=current
         return current
 
@@ -66,6 +78,9 @@ class PcBackend:
         if before!=after:raise PcSafetyError('截图期间桌面端窗口位置或尺寸发生变化。')
         if raw.shape!=(before.height,before.width,3):raise PcSafetyError('桌面端截图尺寸与游戏客户区不一致。')
         self.frame_window=after;self.frame_at=self.clock()
+        from client_viewport import Viewport,pc_viewport,crop_viewport
+        self.frame_viewport=pc_viewport(raw) if self.cfg.get('viewport_mode')=='auto' else Viewport(0,0,before.width,before.height)
+        raw=crop_viewport(raw,self.frame_viewport)
         import cv2
         self.navigation_digest=hashlib.sha256(cv2.resize(raw,(1600,900)).tobytes()).digest()
         return raw
@@ -126,22 +141,40 @@ class PcBackend:
         if current!=self.frame_window:raise PcSafetyError('观察后桌面端窗口发生移动、缩放或显示比例变化。')
         return current
 
+    def input_block_reason(self):
+        current=self.snapshot()
+        if self.frame_window is not None and current!=self.frame_window:
+            raise PcSafetyError('等待输入期间窗口几何发生变化；请确认后继续并重新截图。')
+        query=getattr(type(self.api),'input_block_reason',None)
+        return query(self.api,current) if query else ''
+
     def tap(self,x,y):
-        current=self.ensure();point=current.point(x,y)
+        current=self.ensure();point=self.frame_point(current,x,y)
         if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端点击位置被其他窗口遮挡。')
         self.api.move(*point)
         self.ensure()
         if not self.api.point_is_target(current,*point):raise PcSafetyError('按下鼠标前桌面端目标已变化。')
         self.frame_at=None  # Consume even when the input result is unknown.
-        try:self.api.button(True)
+        try:
+            self.api.button(True)
+        except InputBusy as exc:
+            # MessageWin32Api.button checks ownership only BEFORE WM_LBUTTONDOWN.
+            # Errors with uncertain delivery keep the original intent blocked.
+            raise TapNotSent(str(exc)) from exc
         finally:self.api.button(False)
+
+    def frame_point(self,current,x,y):
+        if self.frame_viewport is None:return current.point(x,y)
+        try:px,py=self.frame_viewport.point(x,y)
+        except ValueError as exc:raise PcSafetyError(str(exc)) from exc
+        return current.x+px,current.y+py
 
     def back(self):
         self.ensure();self.frame_at=None;self.api.escape()
 
     def drag(self,x1,y1,x2,y2,seconds=.45):
         if not .1<=seconds<=1:raise PcSafetyError('桌面端拖动时长不符合允许范围。')
-        current=self.ensure();start=current.point(x1,y1);end=current.point(x2,y2)
+        current=self.ensure();start=self.frame_point(current,x1,y1);end=self.frame_point(current,x2,y2)
         if not self.api.point_is_target(current,*start):raise PcSafetyError('桌面端拖动起点不符合输入条件。')
         self.api.move(*start);self.ensure();self.frame_at=None
         try:
@@ -156,7 +189,7 @@ class PcBackend:
 
     def hold(self,x,y,seconds=2.6):
         if not 0<seconds<=4:raise PcSafetyError('桌面端按住时长不符合允许范围。')
-        current=self.ensure();point=current.point(x,y)
+        current=self.ensure();point=self.frame_point(current,x,y)
         if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端按住目标被遮挡。')
         self.api.move(*point);self.ensure()
         if not self.api.point_is_target(current,*point):raise PcSafetyError('桌面端按住目标已变化。')
@@ -165,6 +198,9 @@ class PcBackend:
             end=self.clock()+seconds
             while self.clock()<end:
                 self.ensure()
+                query=getattr(type(self.api),'input_block_reason',None)
+                reason=query(self.api,current) if query else ''
+                if reason:raise InputBusy(reason)
                 if not self.api.point_is_target(current,*point):raise PcSafetyError('按住期间桌面端目标失效。')
                 time.sleep(.05)
         finally:
@@ -194,6 +230,7 @@ class Win32Api:
             (self.u,'SetThreadDpiAwarenessContext',[c.c_void_p],c.c_void_p),
             (self.u,'GetDC',[w.HWND],w.HDC),(self.u,'ReleaseDC',[w.HWND,w.HDC],c.c_int),
             (self.u,'SetCursorPos',[c.c_int,c.c_int],w.BOOL),
+            (self.u,'GetCursorPos',[c.POINTER(w.POINT)],w.BOOL),
             (self.u,'GetAsyncKeyState',[c.c_int],c.c_short),
             (self.u,'GetSystemMetrics',[c.c_int],c.c_int),
             (self.k,'OpenProcess',[w.DWORD,w.BOOL,w.DWORD],w.HANDLE),

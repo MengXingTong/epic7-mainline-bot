@@ -7,6 +7,7 @@ from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention
 from task_timing import TransitionPacer,next_delay
+from pc_backend import PcSafetyError,InputBusy
 
 class StopRun(Exception):pass
 class PauseRun(Exception):pass
@@ -59,11 +60,38 @@ class GuardedApi:
     def ready(self,s):self.control.check();return self.api.ready(s)
     def capture(self,s):self.control.check();return self.api.capture(s)
     def point_is_target(self,*args):self.control.check();return self.api.point_is_target(*args)
+    def input_block_reason(self,s):
+        self.control.check();query=getattr(type(self.api),'input_block_reason',None)
+        return query(self.api,s) if query else ''
     def move(self,*args):self.control.check();return self.api.move(*args)
     def button(self,down):
         if down:self.control.check()
         return self.api.button(down)
     def escape(self):self.control.check();return self.api.escape()
+
+
+def client_attention(exc):
+    if isinstance(exc,InputBusy):
+        return TaskAttention('client_input','输入被接管，已暂停','检测到鼠标或按键接管，当前操作已暂停。请松开按键或移出客户区后点继续，重新读取画面；已记录的入场意图保留，不会再次开战。')
+    return TaskAttention('client_input','客户端操作已暂停',str(exc)+'；确认客户端后点继续，重新截图；若窗口/进程已更换，请停止并重选实例。')
+
+
+def wait_for_input(control,backend,*args):
+    """Wait before intents, then force the caller to capture/plan afresh."""
+    query=getattr(type(backend),'input_block_reason',None)
+    if query is None:return False
+    reason=query(backend,*args)
+    if not reason:return False
+    heartbeat=None
+    while reason:
+        control.check()
+        now=time.monotonic()
+        if heartbeat is None or now-heartbeat>=2:
+            control.status(reason,mode='waiting_input');heartbeat=now
+        control.sleep(.2)
+        reason=query(backend,*args)
+    control.status('输入已空闲，正在重新截图；不复用等待前的坐标。',mode='run')
+    return True
 
 
 def capture_fresh(capture,control,clock=time.monotonic):
@@ -114,12 +142,31 @@ def discover(settings):
     return targets
 
 
+def read_abyss_observation(image,ocr,bank,captured_at):
+    """Normalize OCR only; keep native frame geometry for guarded taps."""
+    from PIL import Image
+    import numpy as np
+    from abyss_core import Observation,Token
+    sampled=image if image.size==(1600,900) else image.resize((1600,900),Image.Resampling.LANCZOS)
+    results,_=ocr(np.array(sampled)[:,:,::-1].copy())
+    sx,sy=image.width/1600,image.height/900
+    tokens=[]
+    for box,text,score in results or []:
+        if score<.65:continue
+        x=min(p[0] for p in box);y=min(p[1] for p in box)
+        r=max(p[0] for p in box);b=max(p[1] for p in box)
+        tokens.append(Token(text,x*sx,y*sy,(r-x)*sx,(b-y)*sy,score=float(score)))
+    return bank.apply(image,Observation(image.width,image.height,tokens,captured_at))
+
+
 def abyss_run(request,control):
-    from abyss_core import Observation,Token,Session,Scene,classify,PauseRequired
+    import copy
+    from entry_journal import can_enter,finish_dispatch
+    from pc_backend import TapNotSent
+    from abyss_core import Session,Scene,classify,PauseRequired
     from abyss_templates import TemplateBank
     from assistant_transport import UnifiedTransport
     from rapidocr_onnxruntime import RapidOCR
-    import numpy as np
     settings,target=request['settings'],request['target']
     transport=UnifiedTransport(settings,target,control.check)
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
@@ -142,12 +189,7 @@ def abyss_run(request,control):
     while True:
         try:
             control.check();snap=capture_fresh(transport.capture,control);image=snap.image
-            results,_=ocr(np.array(image)[:,:,::-1].copy());tokens=[]
-            for box,text,score in results or []:
-                if score<.65:continue
-                x=min(p[0] for p in box);y=min(p[1] for p in box);r=max(p[0] for p in box);b=max(p[1] for p in box)
-                tokens.append(Token(text,x,y,r-x,b-y,score=float(score)))
-            obs=bank.apply(image,Observation(image.width,image.height,tokens,snap.captured_at))
+            obs=read_abyss_observation(image,ocr,bank,snap.captured_at)
             reading=classify(obs,session.normal_verified or settings['observe'])
             floor_text=f' · 第{reading.floor}层' if reading.floor else ''
             control.preview(image)
@@ -175,23 +217,51 @@ def abyss_run(request,control):
                 atomic_json(history_path,history)
             if reading.scene==Scene.NORMAL and reading.available_floor is not None:
                 floor=str(reading.available_floor)
-                if floor in ledger['attempted'] and floor not in ledger['completed']:
+                if not can_enter(ledger,floor) and floor not in ledger['completed']:
                     raise TaskAttention('new_floor','请选择下一新层','当前层已有入场记录；请选择游戏中下一可进行层后继续，不回查旧层、不重复入场。')
+            if reading.scene==Scene.TEAM and session.phase=='idle' and settings.get('start_policy')=='current_screen':
+                # An explicit new Start can use the fully identified current prep page.
+                floor=reading.floor
+                if floor is None:raise TaskAttention('abyss_floor','准备页层数尚未读清','请停留当前页后继续；不猜测层数或开战。')
+                if not can_enter(ledger,str(floor)):
+                    raise TaskAttention('new_floor','当前层已有记录','保留原入场/通关记录；请选择未尝试的新层后继续，不重复开战。')
+                session.normal_verified=True;session.expected_floor=floor;session.entered_floor=floor
             action=session.plan(reading,obs)
             if action:
+                if wait_for_input(control,transport,snap):
+                    previous=None;stable=0;cooldown=0;continue
                 if request.get('navigation_only') and action.kind=='start_battle':
                     control.status('后台导航验收完成；停在准备页，未开战、未消费体力。',mode='done',scene=reading.scene.value+floor_text,wins=0,navigation_verified=True);return
-                if session.last_action_key==action.key and session.action_repeats>=2:raise PauseRequired('同一步两次未变化，停止重复点击。')
+                if session.last_action_key==action.key and session.action_repeats>=2:raise TaskAttention('navigation','页面尚未切换','已尝试两次普通导航，暂停保留现场；处理后继续会重新截图，不自动重开战斗。')
                 if action.kind=='start_battle':
                     floor=str(session.expected_floor)
-                    reserve_abyss_entry(ledger,session.expected_floor,{'requested_at':time.time(),'client':target['client'],'input_mode':settings.get('pc_input')})
+                    before_entry=copy.deepcopy(session.__dict__)
+                    dispatch=reserve_abyss_entry(ledger,session.expected_floor,{'requested_at':time.time(),'client':target['client'],'input_mode':settings.get('pc_input')})
                     atomic_json(history_path,history)
-                if action.kind=='swipe':transport.swipe(snap)
-                else:transport.tap(snap,action.token,action.ordinary_gate)
-                session.applied(action);control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
+                    session.applied(action)  # Intent is durable even if delivery later fails.
+                try:
+                    if action.kind=='swipe':transport.swipe(snap)
+                    else:transport.tap(snap,action.token,action.ordinary_gate)
+                except TapNotSent as exc:
+                    if action.kind!='start_battle':raise
+                    finish_dispatch(dispatch,'not_sent',str(exc));atomic_json(history_path,history)
+                    session.__dict__.update(before_entry)
+                    raise TaskAttention('entry_not_sent','开战点击尚未发送','鼠标接管时取消了点击；移出后点继续，重新核对当前层再开战。') from exc
+                if action.kind=='start_battle':
+                    finish_dispatch(dispatch,'sent');atomic_json(history_path,history)
+                if action.kind!='start_battle':session.applied(action)
+                control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
             control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
         except TaskAttention as exc:
             control.attention(exc);previous=None;stable=0;cooldown=0
+            if not session.last_action_key.startswith('start:'):session.action_repeats=0
+        except PcSafetyError as exc:
+            control.attention(client_attention(exc))
+            previous=None;stable=0;cooldown=0
+        except PauseRequired as exc:
+            if reading.scene in (Scene.DEFEAT,Scene.HARD):raise
+            control.attention(TaskAttention('abyss_flow','当前步骤等待处理',str(exc)+'；保留本次层数和记录，不自动重复入场。'))
+            previous=None;stable=0;cooldown=0
         except PauseRun:control.paused();previous=None;stable=0
 
 
@@ -203,13 +273,16 @@ def mainline_run(request,control):
     if target['client']=='mumu':
         cfg.update(settings['mumu']);cfg.update(backend='mumu_adb',serial=target['serial'],package=target['package'])
     else:
-        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,allow_stretched_client=False,authorization_mode='selected_target'))
+        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,viewport_mode='auto',authorization_mode='selected_target'))
     config_file=Path(request['run_dir'])/'runtime-config.json';atomic_json(config_file,cfg)
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
     import runner
     runner.ROOT=root
     from runner import Runner,classify
     class ControlledRunner(Runner):
+        def stop(self,status,reason):
+            if status=='安全暂停待修复':raise TaskAttention('flow','当前步骤等待处理',reason)
+            return super().stop(status,reason)
         def ensure_game(self):control.check();return super().ensure_game()
         def adb(self,*args,**kwargs):control.check();return super().adb(*args,**kwargs)
     r=ControlledRunner(observe=True)
@@ -245,6 +318,8 @@ def mainline_run(request,control):
             if pacer.waiting(scene):
                 control.status('等待刚才的操作切换界面；不重复点击。',mode='run',scene=scene)
                 control.sleep(.45);continue
+            if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and wait_for_input(control,r.pc):
+                pacer.reset();r.mode_since=time.time();continue
             before=getattr(r,'input_sequence',0)
             keep,delay=r.step(frame)
             acted=getattr(r,'input_sequence',0)!=before
@@ -255,7 +330,14 @@ def mainline_run(request,control):
             if not keep:return
             control.sleep(delay)
         except TaskAttention as exc:
-            control.attention(exc);r.ticket=None;pacer.reset();r.s.pop('attention',None);r.save()
+            control.status(scene=r.s.get('screen',scene))
+            control.attention(exc)
+            if exc.code not in ('flow','client_input','entry_not_sent'):r.ticket=None
+            if exc.code=='flow':r.mode_since=time.time()
+            pacer.reset();r.s.pop('attention',None);r.save()
+        except PcSafetyError as exc:
+            control.attention(client_attention(exc))
+            pacer.reset();r.mode_since=time.time()
         except PauseRun:control.paused();r.ticket=None;pacer.reset()
 
 

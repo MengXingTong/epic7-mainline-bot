@@ -64,7 +64,7 @@ class BattleObservationTests(unittest.TestCase):
 
 
 class BattleWorkerWaitTests(unittest.TestCase):
-    def run_frames(self, frames, session=None, final_error=None, expected_error=StopRun):
+    def run_frames(self, frames, session=None, final_error=None, expected_error=StopRun, expect_attention=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             state_path = root / 'state.json'
@@ -78,6 +78,7 @@ class BattleWorkerWaitTests(unittest.TestCase):
             request = dict(home=folder, settings=dict(observe=False, task='abyss'),
                            target=dict(client='pc', exe='fake.exe'))
             control = Mock()
+            if expect_attention:control.attention.side_effect = StopRun()
             clock = [1300.0]
             control.sleep.side_effect = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
             snap = SimpleNamespace(image=Image.new('RGB', (1200, 675)), captured_at=1300)
@@ -98,7 +99,8 @@ class BattleWorkerWaitTests(unittest.TestCase):
                     abyss_run(request, control)
             transport.tap.assert_not_called()
             transport.swipe.assert_not_called()
-            control.attention.assert_not_called()
+            if expect_attention:control.attention.assert_called_once()
+            else:control.attention.assert_not_called()
             for path, content in before.items():
                 self.assertEqual(path.read_bytes(), content)
             return control, session, clock[0] - 1300
@@ -131,9 +133,9 @@ class BattleWorkerWaitTests(unittest.TestCase):
         _, session, _ = self.run_frames(frames, session)
         self.assertEqual((session.phase, session.expected_floor, session.wins), ('battle', 58, 0))
 
-    def test_actual_target_change_still_exits_instead_of_waiting(self):
+    def test_actual_target_change_waits_for_explicit_user_action_not_auto_retry(self):
         self.run_frames([observation()], final_error=PcSafetyError('所选窗口已变化'),
-                        expected_error=PcSafetyError)
+                        expect_attention=True)
 
     def test_defeat_after_long_wait_still_stops_without_retry(self):
         self.run_frames([observation()] * 20 + [observation('战斗失败', battle=True)],

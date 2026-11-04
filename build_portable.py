@@ -7,7 +7,8 @@ ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
-VERSION='1.4.4-preview'
+SOURCES+=('client_viewport.py','entry_journal.py','Start.cmd','PCStart.cmd')
+VERSION='1.4.5-preview'
 
 
 def copy_tree(source,target):
@@ -71,7 +72,7 @@ def build(args):
     notices='离线预览版 '+VERSION+'\n\n'+'第三方软件与发布说明\n\n本包为 Windows 64 位离线预览版。\n界面运行库 CPython 3.11 许可：gui/LICENSE.txt。\n工作运行库 CPython 3.12 许可：runtime/LICENSE.txt。\nTcl/Tk 许可：gui/tcl/tcl8.6/license.terms 与 gui/tcl/tk8.6/license.terms。\n界面图像库 Pillow 许可与元数据：gui/site-packages/pillow-*.dist-info。\n工作依赖的许可与元数据：vendor/*.dist-info 和各依赖目录。\n工作依赖版本见 requirements.txt；界面运行库版本见 BUILD_INFO.json。\n\n不分发游戏、MuMu 模拟器、ADB 程序、账号、凭据、私有进度、完整游戏截图或日志。\n识别素材仅含通用锁图标裁片及 19 个限定位置的二值战斗界面字形掩码；\n这些是游戏界面参考素材，不是本项目宣称原创的游戏美术。\n不承诺兼容性或账号安全；不注入、不修改内存，也不绕过安全机制。\n'
     (out/'THIRD_PARTY_NOTICES.txt').write_text(notices,encoding='utf-8')
     gui_pillow=next(d.version for d in importlib.metadata.distributions(path=[str(site)]) if d.metadata['Name'].lower()=='pillow')
-    (out/'BUILD_INFO.json').write_text(json.dumps({'version':VERSION,'built_date':'2026-11-03','gui_python':'3.11','gui_pillow':gui_pillow,'worker_python':'3.12','sources':list(SOURCES),'privacy':'仅包含白名单源码、运行库和二值字形掩码；不含私有目录或实时数据'},indent=2),encoding='utf-8')
+    (out/'BUILD_INFO.json').write_text(json.dumps({'version':VERSION,'built_date':'2026-11-04','gui_python':'3.11','gui_pillow':gui_pillow,'worker_python':'3.12','sources':list(SOURCES),'privacy':'仅包含白名单源码、运行库和二值字形掩码；不含私有目录或实时数据'},indent=2),encoding='utf-8')
     files=[p for p in out.rglob('*') if p.is_file()]
     for p in files:
         rel=p.relative_to(out)
@@ -100,13 +101,19 @@ def build_update(package):
     if archive.exists():raise ValueError('更新压缩包已存在，禁止覆盖。')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.5 每次启动默认自动识别客户端，保留上次任务；支持实验性 PC 横向最大化客户区与明确黑边映射。
+鼠标/按键接管时先让行，输入空闲后重新取图；普通导航与窗口问题可进入等待处理。
+只有后端明确证明开战按下尚未发送，才允许用户点继续后重新核对并完成首次入场；原入场和失败记录保留。
+普通深渊按标准尺寸 OCR 后映射回原窗口，可从完整识别的当前准备页开始。
+本次最大化和输入恢复只做离线回归，真实最大化战斗、跨机器后台兼容仍待验收。
 
 v1.4.4 修复英雄亲密度等级上升提示遮住结算：只点击本帧“轻触后关闭”，重新截图后再读取独立结算，不点击背后的下一层或把弹层当通关。
 标题或关闭控件缺失时不猜坐标；资源、付费、容量、战败和确认覆盖层优先。

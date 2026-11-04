@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import cv2
 from PIL import Image
-from pc_backend import PcSafetyError
+from pc_backend import PcSafetyError,InputBusy,TapNotSent
+from client_viewport import Viewport,pc_viewport,crop_viewport
 
 @dataclass
 class FrameSnapshot:
@@ -14,6 +15,7 @@ class FrameSnapshot:
     binding: object
     captured_at: float
     input_tick: int|None=None
+    viewport: Viewport|None=None
 
 class UnifiedTransport:
     def __init__(self,settings,target,check=lambda:None):
@@ -57,43 +59,65 @@ class UnifiedTransport:
         else:raw=cv2.imdecode(np.frombuffer(self.adb('exec-out','screencap','-p'),np.uint8),cv2.IMREAD_COLOR)
         if raw is None:raise RuntimeError('未取得有效的客户端画面。')
         h,w=raw.shape[:2]
-        if w<640 or h<360 or abs(w/h-16/9)>.035:raise RuntimeError('请使用至少640×360的16:9横屏客户区。')
+        viewport=Viewport(0,0,w,h)
+        if self.api:
+            if (w,h)!=(before.width,before.height):raise PcSafetyError('截图尺寸与当前游戏客户区不一致。')
+            try:viewport=pc_viewport(raw)
+            except ValueError as exc:raise PcSafetyError(str(exc)) from exc
+        elif w<640 or h<360 or abs(w/h-16/9)>.035:raise RuntimeError('请将模拟器设为至少640×360的16:9横屏分辨率。')
         after=self.ensure()
-        if before!=after:raise RuntimeError('截图期间客户端位置或尺寸发生变化，已停止操作。')
-        f=FrameSnapshot(Image.fromarray(raw[:,:,::-1]),after,at,tick)
+        if before!=after:raise PcSafetyError('截图期间客户端位置或尺寸发生变化，已停止操作。')
+        f=FrameSnapshot(Image.fromarray(crop_viewport(raw,viewport)[:,:,::-1]),after,at,tick,viewport)
         self.last_input=tick
         self.frame=f;self.frame_window=after
         return f
 
+    def input_block_reason(self,f):
+        if self.api is None:return ''
+        self.check()
+        current=self.ensure()
+        if current!=f.binding:raise PcSafetyError('等待输入期间客户端位置或尺寸发生变化；请确认后继续并重新截图。')
+        query=getattr(type(self.api),'input_block_reason',None)
+        return query(self.api,current) if query else ''
+
     def _fresh(self,f):
         self.check()
-        if f is not self.frame or time.monotonic()-f.captured_at>5:raise RuntimeError('画面已过期或已使用；不发送输入。')
-        if self.ensure()!=f.binding:raise RuntimeError('观察后客户端位置或尺寸发生变化，已停止操作。')
-        if f.input_tick is not None and self.input_tick()!=f.input_tick:raise RuntimeError('检测到手动输入，当前画面校验已失效。')
+        if f is not self.frame or time.monotonic()-f.captured_at>5:raise PcSafetyError('画面已过期或已使用；不发送输入。')
+        if self.ensure()!=f.binding:raise PcSafetyError('观察后客户端位置或尺寸发生变化，已停止操作。')
+        if f.input_tick is not None and self.input_tick()!=f.input_tick:raise PcSafetyError('检测到手动输入，当前画面校验已失效。')
 
     def tap(self,f,token,ordinary_gate=False):
         self._fresh(f)
         x,y=token.center;w,h=f.image.size
-        if not (0<=x<w and 0<=y<h):raise RuntimeError('点击位置超出游戏客户区，已拒绝操作。')
-        if ordinary_gate and not (.80*w<=x<=.99*w and .20*h<=y<=.53*h):raise RuntimeError('只允许进入右上方的普通深渊入口。')
+        if not (0<=x<w and 0<=y<h):raise PcSafetyError('点击位置超出游戏客户区，已拒绝操作。')
+        if ordinary_gate and not (.80*w<=x<=.99*w and .20*h<=y<=.53*h):raise PcSafetyError('只允许进入右上方的普通深渊入口。')
         self.frame=None # Consume before any input; failure never retries the same frame.
         if self.api:
-            s=f.binding;px=s.x+int(x*s.width/w);py=s.y+int(y*s.height/h)
-            if not self.api.point_is_target(s,px,py):raise RuntimeError('桌面端目标已不再符合输入条件。')
+            s=f.binding;viewport=f.viewport or Viewport(0,0,s.width,s.height)
+            px,py=viewport.point(x,y,w,h);px+=s.x;py+=s.y
+            if not self.api.point_is_target(s,px,py):raise PcSafetyError('桌面端目标已不再符合输入条件。')
             self.api.move(px,py);self.check()
-            if not self.api.ready(s):raise RuntimeError('桌面端输入目标已变化，已停止操作。')
+            if not self.api.ready(s):raise PcSafetyError('桌面端输入目标已变化，已停止操作。')
             try:
                 self.api.button(True)
+            except InputBusy as exc:raise TapNotSent(str(exc)) from exc
             finally:self.api.button(False)
             self.last_input=self.input_tick()
         else:self.adb('shell','input','tap',round(x),round(y))
+
+    def back(self,f):
+        """Consume one verified frame before a planner-approved background Back."""
+        self._fresh(f);self.frame=None
+        if self.api:self.api.escape()
+        else:self.adb('shell','input','keyevent','4')
 
     def swipe(self,f):
         self._fresh(f);self.frame=None
         w,h=f.image.size
         if not self.api:self.adb('shell','input','swipe',round(w*.88),round(h*.60),round(w*.34),round(h*.60),500);return
         s=f.binding
-        start=(s.x+round(s.width*.88),s.y+round(s.height*.60));end=s.x+round(s.width*.34)
+        viewport=f.viewport or Viewport(0,0,s.width,s.height)
+        start=(s.x+viewport.x+round(viewport.width*.88),s.y+viewport.y+round(viewport.height*.60));end=s.x+viewport.x+round(viewport.width*.34)
         self.api.move(*start)
         try:
             self.api.button(True)

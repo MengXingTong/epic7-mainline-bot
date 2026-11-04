@@ -9,6 +9,7 @@ import sys
 
 
 SCENE_NAMES = {
+    'attention': '等待处理',
     'capacity_stop': '容量不足（等待处理）',
     'resource_stop': '资源提示（等待处理）',
     'network_error': '网络连接异常',

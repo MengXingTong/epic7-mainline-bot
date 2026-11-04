@@ -24,6 +24,19 @@ class GuiActivityTests(unittest.TestCase):
         self.assertIn('未启动',self.app.activity_title.cget('text'))
         self.assertEqual(self.app.pause_button.cget('state'),'disabled')
         self.assertEqual(str(self.app.activity_progress.cget('mode')),'determinate')
+
+    def test_saved_client_does_not_override_auto_detection_on_next_launch(self):
+        for old_client in ('mumu','pc'):
+            with self.subTest(old_client=old_client):
+                top=tk.Toplevel(self.root)
+                try:
+                    with patch('assistant_app.load_settings',return_value={'client':old_client,'task':'abyss','mumu':{},'data_dir':''}):
+                        app=Assistant(top,ui_check=True)
+                    self.assertEqual(app.client.get(),'自动识别')
+                    self.assertEqual(app.task.get(),'普通深渊')
+                    app.targets=[dict(client='pc',label='live-pc')];app.filter_targets()
+                    self.assertEqual(app.selected_target()['client'],'pc')
+                finally:top.destroy()
     def test_live_observer_clearly_labels_button(self):
         self.worker()
         self.assertIn('不会点击',self.app.activity_title.cget('text'))

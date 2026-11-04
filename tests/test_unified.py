@@ -100,6 +100,7 @@ class MessageApiTests(unittest.TestCase):
         api=MessageWin32Api.__new__(MessageWin32Api)
         api.target=WindowSnapshot(10,20,'EpicSeven.exe',30,100,200,1600,900)
         api.pending=None;api.down=False;api.ready=Mock(return_value=True);api._post=Mock()
+        api.input_block_reason=Mock(return_value='')
         return api
     def test_move_only_records_local_coordinates(self):
         api=self.make();api.move(900,650)

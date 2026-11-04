@@ -99,8 +99,8 @@ def reserve_abyss_entry(ledger,floor,details):
     """Durable intent must be saved before the one permitted entry input."""
     if not isinstance(floor,int) or floor<1:raise ValueError('深渊层数无效。')
     key=str(floor)
-    if key in ledger['attempted']:raise ValueError('该层已有入场记录，不重复开战。')
-    ledger['attempted'][key]=dict(details)
+    from entry_journal import reserve_entry
+    return reserve_entry(ledger,key,details)
 
 
 def window_layout(workarea,screen_size):

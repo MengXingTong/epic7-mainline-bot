@@ -192,10 +192,12 @@ class StoryController:
         end=(max(100,min(1400,start[0]+dx)),max(120,min(750,start[1]+dy)))
         self.r.drag('后台移动剧情地图查找 '+desired,start,end);return True,.7
     def enter(self,f,stage,word):
+        from entry_journal import can_enter,reserve_entry,finish_dispatch
+        from pc_backend import TapNotSent
         desired=self.desired_stage()
         if desired and stage['id']!=desired:
             self.r.back('准备页编号不是目标 '+desired+'，返回地图重新选择');self.ticket=None;return True,.7
-        pending=[a for a in self.book['attempted'].values() if a['stage']==stage['id'] and a['id'] not in self.book['completed'] and not a.get('rejected_before_battle')]
+        pending=[a for a in self.book['attempted'].values() if a['stage']==stage['id'] and a['id'] not in self.book['completed'] and not a.get('rejected_before_battle') and not can_enter(self.book,a['id'])]
         if pending:return self.wait('当前剧情关已有入场记录','结果不明不再次入场；保留全部记录和现场。')
         if stage['id'] in self.book['stages'] and not (self.goal and stage['id']==SAINT_STAGE):
             self.ticket=None;self.r.back('这关已通关，返回地图选下一关');return True,.7
@@ -212,10 +214,17 @@ class StoryController:
             if not auto:return self.wait('无法识别自动战斗开关','保留当前队伍，未开始战斗。')
             return self.act('开启剧情关卡原生自动战斗',auto)
         intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),proof='当前准备页精确关卡编号、体力与自动战斗开关',evidence=self.r.evidence('story-entry-'+stage['id']))
-        self.book['attempted'][intent['id']]=copy.deepcopy(intent);self.book['active']=intent
+        dispatch=reserve_entry(self.book,intent['id'],intent);self.book['active']=intent
         self.r.save()  # Persist full per-run intent BEFORE the only entry click.
         self.entry_wait_until=time.monotonic()+15;self.ticket=None
-        return self.act('剧情关卡入场 '+stage['id']+'（仅正常体力）',word)
+        try:result=self.act('剧情关卡入场 '+stage['id']+'（仅正常体力）',word)
+        except TapNotSent as exc:
+            finish_dispatch(dispatch,'not_sent',str(exc))
+            self.book.setdefault('unresolved_entries',[]).append(copy.deepcopy(intent));self.book['active']=None
+            self.r.save()
+            return self.wait('开战点击尚未发送','鼠标接管时取消了点击；移出后点继续，重新核对当前关再开战。')
+        finish_dispatch(dispatch,'sent');self.r.save()
+        return result
     def clear(self,proof):
         active=self.book.get('active')
         if not active:return

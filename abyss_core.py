@@ -220,7 +220,9 @@ class Session:
             self.accept_clear(reading.floor)
             if self.expected_floor is not None:
                 if time.monotonic()<self.transition_until: return None
-                raise PauseRequired("下一层没有出现预期变化，未重复消耗体力。")
+                if not (self.phase=='next_opening' and reading.floor==self.last_won_floor
+                        and self.last_action_key==f'clear-next:{reading.floor}' and self.action_repeats<2):
+                    raise TaskAttention('navigation','下一层准备页尚未打开','普通导航已尝试两次；请确认游戏后继续，不会重新开战或消费入场资源。')
             return self._action("进入下一层准备页",o.find("下一层",region=(.78,.84,.99,.99)),
                                 f"clear-next:{reading.floor}",scene,kind="advance",target_floor=reading.floor+1)
         if scene==Scene.LOBBY:
@@ -237,7 +239,9 @@ class Session:
         if scene==Scene.NORMAL:
             if self.phase=="team_opening":
                 if time.monotonic()<self.transition_until:return None
-                raise PauseRequired("选择队伍后界面未变化，已停止重试。")
+                if not (reading.floor==reading.available_floor==self.expected_floor
+                        and self.last_action_key==f'choose-team:{self.expected_floor}' and self.action_repeats<2):
+                    raise TaskAttention('navigation','准备页尚未打开','普通导航已尝试两次；请确认游戏后继续，不会重复入场。')
             if reading.floor is None or reading.available_floor is None:
                 raise PauseRequired("未唯一确认当前层数与可进行层数，已阻止重刷或误入锁定层。")
             if self.last_won_floor is not None and reading.available_floor<=self.last_won_floor:
@@ -254,9 +258,9 @@ class Session:
             self.require_normal()
             if reading.floor and reading.floor!=self.expected_floor:
                 raise PauseRequired("队伍页层数与预期不一致，已停止开战。")
-            if self.phase=="battle_opening":
-                if time.monotonic()<self.transition_until:return None
-                raise PauseRequired("开战后界面未变化，已停止重复入场。")
+            if self.phase in ("battle_opening","battle"):
+                if self.phase=="battle_opening" and time.monotonic()<self.transition_until:return None
+                raise TaskAttention('entry_uncertain','开战结果尚未确认','已经保留本次入场记录，不再点击开战；可手动处理后继续观察结果，或停止任务。')
             return self._action("普通深渊开战",o.find("战斗开始",region=(.76,.83,.99,.99)),
                                 f"start:{self.expected_floor}",scene,kind="start_battle",target_floor=self.expected_floor)
         if scene==Scene.BATTLE:

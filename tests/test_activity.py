@@ -28,3 +28,11 @@ class ActivityTests(unittest.TestCase):
         self.assertFalse(activity('done',alive=True).moving)
     def test_unknown_is_not_running(self):
         self.assertIn('状态未知',activity('new').title)
+
+    def test_input_wait_is_auto_resume_not_a_blocked_task(self):
+        state=activity('waiting_input',observe=False,alive=True)
+        self.assertIn('自动继续',state.title);self.assertTrue(state.moving)
+        self.assertNotIn('未运行',state.title)
+    def test_dead_worker_cannot_remain_in_input_wait(self):
+        state=activity('waiting_input',observe=False,alive=False)
+        self.assertIn('已停止',state.title);self.assertFalse(state.moving)

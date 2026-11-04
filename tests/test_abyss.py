@@ -66,11 +66,14 @@ class RealFrameTests(unittest.TestCase):
         self.assertEqual((next_action.kind,next_action.target_floor),('advance',53))
         self.assertEqual(s.wins,1);self.assertEqual(s.last_won_floor,52)
         self.assertIsNone(s.expected_floor)
-    def test_stale_clear_cannot_double_enter(self):
+    def test_stale_clear_retries_navigation_once_not_battle_entry(self):
         s=Session();o=frame('clear-051');s.applied(s.plan(classify(o),o))
         self.assertIsNone(s.plan(classify(o),o));self.assertEqual(s.wins,0)
         s.transition_until=time.monotonic()-1
-        with self.assertRaises(PauseRequired):s.plan(classify(o),o)
+        action=s.plan(classify(o),o);self.assertEqual((action.kind,action.target_floor),('advance',52))
+        s.applied(action);s.transition_until=time.monotonic()-1
+        with self.assertRaises(TaskAttention):s.plan(classify(o),o)
+        self.assertEqual(s.wins,0)
     def test_repeated_clear_does_not_double_count(self):
         s=Session(normal_verified=True,entered_floor=52,expected_floor=52,phase='battle')
         o=frame('clear-052');s.plan(classify(o),o);s.plan(classify(o),o)
