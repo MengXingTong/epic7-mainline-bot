@@ -7,8 +7,8 @@ sys.path.insert(1,str(Path(__file__).resolve().parent/'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention
-from task_timing import TransitionPacer,next_delay
-from pc_backend import PcSafetyError,InputBusy
+from task_timing import TransitionPacer,next_delay,ScreenStabilityGate
+from pc_backend import PcSafetyError,InputBusy,FrameExpired,NavigationFrameExpired
 
 class StopRun(Exception):pass
 class PauseRun(Exception):pass
@@ -114,6 +114,19 @@ def capture_fresh(capture,control,clock=time.monotonic):
                 control.status('切屏期间暂未取得画面，正在重新取图；不点击、不切换前台。',mode='recovering')
                 control.sleep(.4)
 
+
+class PlanningFrameGate:
+    """Recapture stale PC frames only BEFORE planning, journaling or dispatch."""
+    def __init__(self):self.reset()
+    def reset(self):self.expired=0
+    def ready(self,backend):
+        if backend is None:return True
+        try:backend.ensure()
+        except FrameExpired:
+            self.expired+=1
+            return False
+        self.reset();return True
+
 def discover(settings):
     from pc_backend import Win32Api
     api=Win32Api();targets=[]
@@ -186,7 +199,7 @@ def abyss_run(request,control):
     key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
     if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
-    previous=None;stable=0;cooldown=0;cooldown_scene=None
+    previous=None;stable=0;cooldown=0;cooldown_scene=None;dialog_stability=ScreenStabilityGate()
     while True:
         try:
             control.check();snap=capture_fresh(transport.capture,control);image=snap.image
@@ -207,6 +220,14 @@ def abyss_run(request,control):
             if settings['observe']:
                 if request.get('once'):return
                 control.sleep(1);continue
+            if reading.scene in (Scene.BLOCKED,Scene.CAPACITY):
+                if wait_for_input(control,transport,snap):
+                    dialog_stability.reset();previous=None;stable=0;continue
+                words=[dict(text=t.text,x=t.center[0],y=t.center[1],score=t.score) for t in obs.tokens]
+                if dialog_stability.waiting('unknown_dialog',image,words,obs.width,obs.height):
+                    control.status('正在等待弹窗稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=reading.scene.value,wins=session.wins)
+                    control.sleep(.4);continue
+            else:dialog_stability.reset()
             if reading.scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED,Scene.CAPACITY):session.plan(reading,obs)
             if reading.scene==Scene.UNKNOWN:
                 # No input is pending. Keep observing instead of treating OCR gaps
@@ -254,16 +275,16 @@ def abyss_run(request,control):
                 control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
             control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
         except TaskAttention as exc:
-            control.attention(exc);previous=None;stable=0;cooldown=0
+            control.attention(exc);previous=None;stable=0;cooldown=0;dialog_stability.reset()
             if not session.last_action_key.startswith('start:'):session.action_repeats=0
         except PcSafetyError as exc:
             control.attention(client_attention(exc))
-            previous=None;stable=0;cooldown=0
+            previous=None;stable=0;cooldown=0;dialog_stability.reset()
         except PauseRequired as exc:
             if reading.scene in (Scene.DEFEAT,Scene.HARD):raise
             control.attention(TaskAttention('abyss_flow','当前步骤等待处理',str(exc)+'；保留本次层数和记录，不自动重复入场。'))
-            previous=None;stable=0;cooldown=0
-        except PauseRun:control.paused();previous=None;stable=0
+            previous=None;stable=0;cooldown=0;dialog_stability.reset()
+        except PauseRun:control.paused();previous=None;stable=0;dialog_stability.reset()
 
 
 def mainline_run(request,control):
@@ -305,7 +326,7 @@ def mainline_run(request,control):
     from story_core import StoryController
     r.story=StoryController(r,settings)
     count=lambda:len(r.s['completed'])+r.story.total_wins()
-    baseline=count();pacer=TransitionPacer()
+    baseline=count();pacer=TransitionPacer();stability=ScreenStabilityGate();planning=PlanningFrameGate()
     while True:
         try:
             control.check();frame=capture_fresh(r.capture,control)
@@ -316,15 +337,23 @@ def mainline_run(request,control):
                 if request.get('once'):return
                 control.sleep(2);continue
             scene=classify(frame)
+            if wait_for_input(control,backend):
+                pacer.reset();stability.reset();r.mode_since=time.time();continue
+            if stability.waiting(scene,frame.image,getattr(frame,'words',())):
+                r.mode_since=time.time()
+                control.status('正在等待画面和控件稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=scene)
+                control.sleep(.4);continue
             if pacer.waiting(scene):
                 control.status('等待刚才的操作切换界面；不重复点击。',mode='run',scene=scene)
                 control.sleep(.45);continue
-            if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and wait_for_input(control,r.pc):
-                pacer.reset();r.mode_since=time.time();continue
+            if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and not planning.ready(backend):
+                control.status('识别耗时导致画面过期，正在重新取图；尚未规划操作。',mode='recovering',scene=scene)
+                control.sleep(.2);continue
             before=getattr(r,'input_sequence',0)
             keep,delay=r.step(frame)
             acted=getattr(r,'input_sequence',0)!=before
-            if acted:pacer.applied(scene,entry=bool(r.s.get('active') and scene=='team'))
+            if acted:
+                pacer.applied(scene,entry=bool(r.s.get('active') and scene=='team'));stability.reset()
             if settings.get('fast_mode',True):delay=next_delay('natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene,delay,acted)
             wins=count()-baseline
             control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
@@ -335,11 +364,17 @@ def mainline_run(request,control):
             control.attention(exc)
             if exc.code not in ('flow','client_input','entry_not_sent'):r.ticket=None
             if exc.code=='flow':r.mode_since=time.time()
-            pacer.reset();r.s.pop('attention',None);r.save()
+            pacer.reset();stability.reset();planning.reset();r.s.pop('attention',None);r.save()
+        except NavigationFrameExpired:
+            control.status('普通导航尚未发送，画面已过期；正在重新截图并核对当前页。',
+                           mode='recovering',scene=r.s.get('screen',scene))
+            pacer.reset();stability.reset();r.mode_since=time.time()
+            control.sleep(.4)
         except PcSafetyError as exc:
+            control.status(scene=r.s.get('screen',scene))
             control.attention(client_attention(exc))
-            pacer.reset();r.mode_since=time.time()
-        except PauseRun:control.paused();r.ticket=None;pacer.reset()
+            pacer.reset();stability.reset();planning.reset();r.mode_since=time.time()
+        except PauseRun:control.paused();r.ticket=None;pacer.reset();stability.reset();planning.reset()
 
 
 def observe_mainline(request,control):

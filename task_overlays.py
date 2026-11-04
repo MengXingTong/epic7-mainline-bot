@@ -34,6 +34,21 @@ FRIENDSHIP_TITLES=('英雄亲密度等级上升','英雄亲密度等级提升',
                    '英雄親密度等級上升','英雄親密度等級提升')
 
 
+def battle_settlement_confirm(words,width=1600,height=900):
+    """Require both result labels and a unique, confident bottom-right button."""
+    rows=[(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).translate(
+        str.maketrans({'確':'确','認':'认'})),w['x']/width,w['y']/height,w) for w in words]
+    if any(text in ('取消','취소') for text,x,y,word in rows):return None
+    confirmations=[row for row in rows if row[0] in ('确认','确定')]
+    confident=[row for row in rows if row[3].get('score',1.0)>=.8]
+    if (len(confirmations)==1 and confirmations[0][3].get('score',1.0)>=.8
+        and .8125<confirmations[0][1]<.98 and .8333<confirmations[0][2]<.98
+        and any(text=='获得的道具' and .72<x<.99 and 0<y<.18 for text,x,y,word in confident)
+        and any(text=='战斗结果' and .6875<x<.894 and .822<y<.999 for text,x,y,word in confident)):
+        return confirmations[0][3]
+    return None
+
+
 def friendship_upgrade_notice_close(words,width=1600,height=900):
     """Dismiss the free friendship notice at its current, observed close label."""
     translate=str.maketrans({'親':'亲','級':'级','輕':'轻','觸':'触','後':'后',
@@ -54,12 +69,5 @@ def friendship_upgrade_notice_close(words,width=1600,height=900):
         # The friendship modal can cover the independent battle-result page.
         # Ignore only its observed bottom-right Confirm; every other confirm,
         # cancel, paid/resource or defeat combination remains a veto.
-        settlement_background=(len(confirmations)==1 and confirmations[0][3].get('score',1.0)>=.8
-            and .78<confirmations[0][1]<.98
-            and .78<confirmations[0][2]<.98
-            and any(text=='获得的道具' and .72<x<.99 and 0<y<.18
-                    for text,x,y,word in confident)
-            and any(text=='战斗结果' and .65<x<.9 and .78<y<.98
-                    for text,x,y,word in confident))
-        if not settlement_background:return None
+        if battle_settlement_confirm(words,width,height) is None:return None
     return close[0] if heading and len(close)==1 else None

@@ -308,7 +308,8 @@ class WorkerRecoveryTests(unittest.TestCase):
                          target=dict(client='mumu',serial='fake',package='fake'))
             with patch('assistant_worker.validate_run',return_value=(root,{})),patch.object(runner,'ROOT',root), \
                  patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='unknown'), \
-                 patch('story_core.StoryController',return_value=story):
+                 patch('story_core.StoryController',return_value=story), \
+                 patch('assistant_worker.ScreenStabilityGate',return_value=Mock(waiting=Mock(return_value=False))):
                 if status=='强度不足卡关' and not input_error:mainline_run(request,ctl)
                 else:
                     with self.assertRaises(StopRun):mainline_run(request,ctl)

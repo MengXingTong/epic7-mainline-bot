@@ -10,7 +10,7 @@ sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES
+from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES,battle_settlement_confirm
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 from story_core import team_entry_control
@@ -141,12 +141,13 @@ def classify(f):
     if f.find(r'^跳过教学$',(1330,0,1599,100)) and not conf:return 'tutorial_skip'
     if conf and ('跳过故事' in middle or '跳过剧情' in middle): return 'skip_confirm'
     if conf and cancel: return 'unknown_dialog'
+    # A settlement confirmation must have two independent result-only labels.
+    if battle_settlement_confirm(f.words):return 'settlement'
+    if conf and f.any('Rank Up','Rank.Up','等级提升','等级上升') and not f.any('购买','兑换'): return 'rankup'
+    # Unrecognized controls veto underlying maps, rewards and battle HUDs.
+    if conf or cancel:return 'unknown_dialog'
     if f.any('故事完成奖励已正常发放','获得星星奖励已正常发放') and f.find('点击关闭',(500,500,1100,720)): return 'story_reward'
     if f.any('支线故事通知') and f.any('已解锁') and f.any('支线故事一览') and f.find('点击关闭',(500,550,1100,780)): return 'unlock_notice'
-    # A settlement confirmation must have two independent result-only labels.
-    if conf and f.find('获得的道具', (1150,0,1599,160)) and f.find('战斗结果',(1100,740,1430,899)):
-        return 'settlement'
-    if conf and f.any('Rank Up','Rank.Up','等级提升','等级上升') and not f.any('购买','兑换'): return 'rankup'
     if f.any('解锁缘分') and f.any('结下缘分') and f.find(r'^OK$',(600,550,1000,720)): return 'bond_notice'
     if legacy_region_cards(f):return 'legacy_story_regions'
     if legacy_map_info(f):return 'legacy_story_map'
@@ -236,6 +237,18 @@ class Runner:
         if not any(self.cfg['package'] in line for line in resumed):
             raise RuntimeError('模拟器前台应用不是已授权的游戏；未发送输入。')
     def action(self,kind,word=None,xy=None):
+        from pc_backend import FrameExpired,NavigationFrameExpired
+        try:return self._action(kind,word,xy)
+        except FrameExpired as exc:
+            # Only these ordinary map/support taps can be replanned automatically.
+            # Entry intents, drags, holds and uncertain delivery never use this path.
+            ordinary={'未通关验证通过，准备战斗','避开已通关关卡，选择下一关',
+                      '完成本章后进入下一章','选择当前队伍'}
+            if (kind in ordinary and self.s.get('screen') in ('map','support')
+                and not self.s.get('active') and getattr(self,'pc',None)):
+                raise NavigationFrameExpired('普通导航发送前画面过期；重新识别当前页。') from exc
+            raise
+    def _action(self,kind,word=None,xy=None):
         self.ensure_game()
         if time.time()-self.frame.at>5: raise RuntimeError('观察画面已过期；已取消操作。')
         blocker=capacity_blocker(w['text'] for w in self.frame.words)
@@ -348,7 +361,7 @@ class Runner:
                 return self.stop('安全暂停待修复','结算画面没有可对应的本次入场记录，停止而非猜测进度')
             self.completed('独立识别：获得的道具 + 战斗结果 + 结算确认')
             self.ticket=None
-            self.action('确认通关结算',f.find(r'^(确认|确定|確定|確認)$',(1300,750,1599,899))); return True,4
+            self.action('确认通关结算',battle_settlement_confirm(f.words)); return True,4
         if mode=='unlock_notice':
             self.action('关闭免费支线解锁通知，继续主线',f.find('点击关闭',(500,550,1100,780))); return True,3
         if mode=='bond_notice':

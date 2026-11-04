@@ -19,6 +19,15 @@ class InputUxGuiTests(unittest.TestCase):
         self.app.run_id='test';self.app.process=Mock(pid=123);self.app.process.poll.return_value=None
         self.app.mode='waiting_input';self.app.update_buttons()
     def tearDown(self):self.root.destroy();self.prefs.stop()
+
+    def test_scene_wait_keeps_controls_readable_and_pause_stop_available(self):
+        self.app.mode='waiting_scene';self.app.update_buttons()
+        self.assertEqual(self.app.start_button.cget('text'),'等待画面稳定…')
+        self.assertEqual(self.app.start_button.cget('state'),'disabled')
+        self.assertEqual(self.app.start_button.cget('disabledforeground'),'white')
+        self.assertEqual(self.app.start_button.cget('activeforeground'),'white')
+        self.assertEqual(self.app.pause_button.cget('state'),'normal')
+        self.assertEqual(self.app.stop_button.cget('state'),'normal')
     def event(self,mode):
         self.app.events.put(('worker',dict(kind='status',run_id='test',mode=mode,
                                           status='鼠标移出后自动继续',scene='准备战斗',wins=0)))

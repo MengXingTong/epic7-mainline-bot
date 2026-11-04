@@ -13,6 +13,12 @@ import numpy as np
 class PcSafetyError(RuntimeError):
     pass
 
+class FrameExpired(PcSafetyError):
+    """An unconsumed observation exceeded its age limit; never extends its TTL."""
+
+class NavigationFrameExpired(FrameExpired):
+    """A whitelisted non-entry tap expired before any button-down was sent."""
+
 class InputBusy(PcSafetyError):
     """Physical input owns the client; no new synthetic press was sent."""
 
@@ -135,10 +141,12 @@ class PcBackend:
         if self.read_only:raise PcSafetyError('只读桌面端后端不发送输入。')
         self._stop_check()
         if not self.allowed:raise PcSafetyError('桌面端输入缺少已核实的目标授权。')
-        if self.frame_at is None or self.clock()-self.frame_at>5:
+        if self.frame_at is None:
             raise PcSafetyError('桌面端画面已过期；未发送输入。')
         current=self.snapshot()
         if current!=self.frame_window:raise PcSafetyError('观察后桌面端窗口发生移动、缩放或显示比例变化。')
+        if self.clock()-self.frame_at>5:
+            raise FrameExpired('桌面端画面已过期；未发送输入。')
         return current
 
     def input_block_reason(self):

@@ -59,7 +59,8 @@ class ContinuousExecutionTests(unittest.TestCase):
                     def step(self,frame):self.s['completed'][str(self.captures)]={};return True,5
                 request={'settings':settings,'target':{'client':'mumu','serial':'fake-local','package':'fake-game'},'run_dir':d}
                 control=Mock()
-                with patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='battle'),patch.object(runner,'ROOT',root),patch.dict('os.environ',{},clear=False):
+                with patch('runner.Runner',FakeRunner),patch('runner.classify',return_value='battle'),patch.object(runner,'ROOT',root),patch.dict('os.environ',{},clear=False), \
+                     patch('assistant_worker.ScreenStabilityGate',return_value=Mock(waiting=Mock(return_value=False))):
                     with self.assertRaises(StopRun):mainline_run(request,control)
                 self.assertEqual(len(instances[0].s['completed']),33)
                 self.assertTrue(any(call.kwargs.get('wins')==33 for call in control.status.call_args_list))

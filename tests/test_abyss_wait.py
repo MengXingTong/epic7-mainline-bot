@@ -141,6 +141,14 @@ class BattleWorkerWaitTests(unittest.TestCase):
         self.run_frames([observation()] * 20 + [observation('战斗失败', battle=True)],
                         expected_error=PauseRequired)
 
+    def test_changing_popup_keeps_observing_without_losing_history(self):
+        frames=[observation('确认', '变化中的说明'+str(i)) for i in range(25)]
+        control, _, _=self.run_frames(frames)
+        self.assertEqual(control.status.call_args.kwargs['mode'],'waiting_scene')
+
+    def test_stable_unknown_popup_requires_explicit_user_handling(self):
+        self.run_frames([observation('确认')]*20,expect_attention=True)
+
 
 if __name__ == '__main__':
     unittest.main()

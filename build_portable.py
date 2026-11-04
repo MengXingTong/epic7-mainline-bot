@@ -8,7 +8,7 @@ sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
 SOURCES+=('client_viewport.py','entry_journal.py','Start.cmd','PCStart.cmd')
-VERSION='1.4.7-preview'
+VERSION='1.4.8-preview'
 
 
 def copy_tree(source,target):
@@ -67,6 +67,7 @@ def build(args):
     (out/'portable.json').write_text(json.dumps({'app':'第七史诗统一助手','version':VERSION,'platform':'Windows 64 位','offline':True},indent=2),encoding='utf-8')
     shutil.copy2(ROOT/'docs'/'SHARE_README.md',out/'README_zh-CN.md')
     shutil.copy2(ROOT/'docs'/'STORY_VALIDATION_2026-11-03.md',out/'VALIDATION.md')
+    shutil.copy2(ROOT/'docs'/'STALL_VALIDATION_2026-11-04.md',out/'STALL_VALIDATION.md')
     shutil.copy2(out/'Assistant.cmd',out/'启动助手.cmd')
     (out/'SelfCheck.cmd').write_text('@echo off\r\nsetlocal\r\nchcp 65001 >nul\r\n"%~dp0gui\\python.exe" -B -X utf8 "%~dp0portable_selfcheck.py"\r\necho.\r\npause\r\n',encoding='ascii',newline='')
     notices='离线预览版 '+VERSION+'\n\n'+'第三方软件与发布说明\n\n本包为 Windows 64 位离线预览版。\n界面运行库 CPython 3.11 许可：gui/LICENSE.txt。\n工作运行库 CPython 3.12 许可：runtime/LICENSE.txt。\nTcl/Tk 许可：gui/tcl/tcl8.6/license.terms 与 gui/tcl/tk8.6/license.terms。\n界面图像库 Pillow 许可与元数据：gui/site-packages/pillow-*.dist-info。\n工作依赖的许可与元数据：vendor/*.dist-info 和各依赖目录。\n工作依赖版本见 requirements.txt；界面运行库版本见 BUILD_INFO.json。\n\n不分发游戏、MuMu 模拟器、ADB 程序、账号、凭据、私有进度、完整游戏截图或日志。\n识别素材仅含通用锁图标裁片及 19 个限定位置的二值战斗界面字形掩码；\n这些是游戏界面参考素材，不是本项目宣称原创的游戏美术。\n不承诺兼容性或账号安全；不注入、不修改内存，也不绕过安全机制。\n'
@@ -99,15 +100,21 @@ def build_update(package):
     if record['version']!=VERSION:raise ValueError('更新文件的版本不匹配。')
     archive=package.with_name('Epic7-Assistant-update-'+VERSION+'.zip')
     if archive.exists():raise ValueError('更新压缩包已存在，禁止覆盖。')
-    names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
+    names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','STALL_VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 / v1.4.7 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.8 在画面/控件持续变化时保持零输入观察，稳定后再判断；用户操作时先让行。
+普通深渊未确认/容量弹窗也先等稳定；主按钮运行/等待时保持白字。
+PC规划前单纯过期会持续重取；已明确未发送的普通地图/辅助选队导航也重新截图规划。
+入场意图、发送不明、窗口/进程/几何异常仍按原规则保护，不自动重开战斗。
+本次新增离线回归、包自检和只读画面观察，没有新增修复后整场实机战斗验收；详见STALL_VALIDATION.md。
 
 v1.4.7 修复好感度提升提示覆盖在战斗结算页时，被底层“确认”误判为冲突而卡住。
 只有前景标题/关闭控件及底层“获得的道具”“战斗结果”和唯一右下角确认全部明确，才点击前景“轻触后关闭”；其他确认、资源、购买、复活和战败继续拦截。

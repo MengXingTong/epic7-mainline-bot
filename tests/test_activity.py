@@ -36,3 +36,8 @@ class ActivityTests(unittest.TestCase):
     def test_dead_worker_cannot_remain_in_input_wait(self):
         state=activity('waiting_input',observe=False,alive=False)
         self.assertIn('已停止',state.title);self.assertFalse(state.moving)
+
+    def test_scene_wait_is_observing_with_heartbeat_and_not_a_dead_worker(self):
+        state=activity('waiting_scene',observe=False,alive=True)
+        self.assertIn('等待画面稳定',state.title);self.assertTrue(state.moving)
+        self.assertIn('已停止',activity('waiting_scene',alive=False).title)

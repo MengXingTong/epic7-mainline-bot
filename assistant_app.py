@@ -115,7 +115,7 @@ class Assistant:
         box=ttk.Combobox(parent,textvariable=var,values=values,state='readonly',font=('Microsoft YaHei UI',10))
         box.grid(row=row,column=1,columnspan=columnspan,sticky='ew',pady=4);return box
     def button(self,parent,text,command,bg,fg):
-        return tk.Button(parent,text=text,command=command,bg=bg,fg=fg,activebackground=bg,relief='flat',bd=0,padx=17,pady=9,font=('Microsoft YaHei UI',10,'bold'),cursor='hand2')
+        return tk.Button(parent,text=text,command=command,bg=bg,fg=fg,activebackground=bg,activeforeground=fg,disabledforeground=fg,relief='flat',bd=0,padx=17,pady=9,font=('Microsoft YaHei UI',10,'bold'),cursor='hand2')
     def log(self,text):
         self.logs.configure(state='normal');self.logs.insert('end',time.strftime('%H:%M:%S')+'  '+text+'\n');self.logs.see('end')
         if int(self.logs.index('end-1c').split('.')[0])>160:self.logs.delete('1.0','30.0')
@@ -170,11 +170,11 @@ class Assistant:
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
         label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
-        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
+        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','waiting_scene':'等待画面稳定…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
         self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) else 'normal')
-        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input') else 'disabled')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input','waiting_scene') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
     def update_activity(self):
@@ -197,6 +197,7 @@ class Assistant:
             age=int(time.monotonic()-self.last_heartbeat)
             text=('工作进程已暂停，等待手动处理' if self.mode in ('paused','attention') else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
             if self.mode=='waiting_input':text='输入空闲后自动继续，不需要重新开始  |  本次用时 '+self.elapsed.get()
+            if self.mode=='waiting_scene':text='画面稳定后自动判断，不需要重新开始  |  本次用时 '+self.elapsed.get()
             elif age>15 and self.mode not in ('paused','attention'):text+='  · 仍在等待响应，不代表已卡死'
         else:text='任务没有运行。点击开始才会启动；说明文字不代表任务已开始。'
         self.activity_meta.configure(text=text)
