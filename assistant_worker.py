@@ -3,6 +3,7 @@ from __future__ import annotations
 import  hashlib, json, os, subprocess, sys, time, traceback
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
+sys.path.insert(1,str(Path(__file__).resolve().parent/'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention

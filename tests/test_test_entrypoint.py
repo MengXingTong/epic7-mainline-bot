@@ -79,3 +79,24 @@ class TestEntrypointTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('Ran 1 test', result.stderr)
             self.assertIn('OK', result.stderr)
+
+    def test_worker_help_loads_its_own_vendor_before_backend_import(self):
+        with tempfile.TemporaryDirectory(prefix='epic7-worker-entry-') as folder:
+            root = Path(folder)
+            for name in ('assistant_worker.py', 'ui_text.py', 'assistant_config.py',
+                         'task_blockers.py', 'task_timing.py', 'pc_backend.py'):
+                shutil.copy2(entry.ROOT / name, root)
+            vendor = root / 'vendor'
+            vendor.mkdir()
+            (vendor / 'numpy.py').write_text(
+                'from pathlib import Path\n'
+                'Path(__file__).with_suffix(".loaded").write_text("local vendor loaded")\n',
+                encoding='utf-8')
+            result = subprocess.run([sys.executable, '-I', '-B', '-X', 'utf8',
+                                     str(root / 'assistant_worker.py'), '--help'],
+                                    cwd=root, capture_output=True, text=True,
+                                    encoding='utf-8', timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('用法：', result.stdout)
+            self.assertTrue((vendor / 'numpy.loaded').is_file())
+            self.assertFalse((root / '.local').exists())
