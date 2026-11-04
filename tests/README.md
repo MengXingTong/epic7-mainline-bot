@@ -33,3 +33,5 @@ A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI h
 ## 队伍准备页
 
 `test_team_preparation.py` 验证带AUTO与辅助英雄空位两类布局、仅普通单次入场、地图链/体力/历史/弹窗优先、关键落盘和发送不明防重；输入及状态保存均使用模拟对象。可通过 `EPIC7_TEAM_FIXTURES` 指向含 `team.png`、`team-ocr.json` 的本机目录回放报告画面，默认使用本机私有回放目录；缺少文件明确跳过，素材不随源码分发，不操作游戏。
+
+`test_friendship_notice.py` 验证好感度提示只操作本帧关闭控件，包括其覆盖在带右下角“确认”的战斗结算页时；只有“获得的道具”“战斗结果”和唯一结算确认同时成立才忽略底层按钮，其他确认、资源、复活、容量与战败覆盖层继续拦截。私有保存画面仅做离线OCR回放，不随源码分发。

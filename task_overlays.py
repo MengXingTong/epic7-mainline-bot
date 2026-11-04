@@ -41,7 +41,7 @@ def friendship_upgrade_notice_close(words,width=1600,height=900):
         '換':'换','復':'复','確':'确','認':'认'})
     rows=[(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).translate(translate).casefold(),
            w['x']/width,w['y']/height,w) for w in words]
-    if any(text in ('确认','确定','取消','failed','defeat') or any(v in text for v in
+    if any(text in ('取消','failed','defeat') or any(v in text for v in
            ('购买','兑换','复活','是否消耗','是否使用','消耗道具','使用道具','战斗失败','挑战失败'))
            for text,x,y,word in rows):return None
     confident=[row for row in rows if row[3].get('score',1.0)>=.8]
@@ -49,4 +49,17 @@ def friendship_upgrade_notice_close(words,width=1600,height=900):
                 for text,x,y,word in confident)
     close=[word for text,x,y,word in confident if text in ('轻触后关闭','轻触关闭','点击关闭')
            and .25<x<.9 and .5<y<.96]
+    confirmations=[row for row in rows if row[0] in ('确认','确定')]
+    if confirmations:
+        # The friendship modal can cover the independent battle-result page.
+        # Ignore only its observed bottom-right Confirm; every other confirm,
+        # cancel, paid/resource or defeat combination remains a veto.
+        settlement_background=(len(confirmations)==1 and confirmations[0][3].get('score',1.0)>=.8
+            and .78<confirmations[0][1]<.98
+            and .78<confirmations[0][2]<.98
+            and any(text=='获得的道具' and .72<x<.99 and 0<y<.18
+                    for text,x,y,word in confident)
+            and any(text=='战斗结果' and .65<x<.9 and .78<y<.98
+                    for text,x,y,word in confident))
+        if not settlement_background:return None
     return close[0] if heading and len(close)==1 else None

@@ -21,6 +21,8 @@ NOTICE = [dict(text=t, x=x, y=y, score=.99) for t, x, y in [
     ('初次见面的关系', 738, 406), ('打过招呼的关系', 1178, 406), ('轻触后关闭', 948, 698)]]
 BACKGROUND = [dict(text=t, x=x, y=y, score=.99) for t, x, y in [
     ('深渊', 800, 510), ('第58层', 800, 600), ('返回', 160, 840), ('下一层', 1480, 827)]]
+SETTLEMENT_BACKGROUND = [dict(text=t, x=x, y=y, score=.99) for t, x, y in [
+    ('获得的道具', 1454, 61), ('战斗结果', 1259, 824), ('确认', 1442, 824)]]
 
 
 def frame(words):
@@ -47,6 +49,35 @@ class FriendshipNoticeTests(unittest.TestCase):
         obs = observation(NOTICE + BACKGROUND)
         self.assertEqual(abyss_classify(obs, True).scene, Scene.FRIENDSHIP_UPGRADE)
         self.assertEqual(runner.classify(frame(NOTICE + BACKGROUND)), 'friendship_upgrade_notice')
+
+    def test_settlement_confirm_behind_notice_does_not_hide_observed_close(self):
+        words = NOTICE + SETTLEMENT_BACKGROUND
+        target = friendship_upgrade_notice_close(words)
+        self.assertEqual(target['text'], '轻触后关闭')
+        self.assertEqual(runner.classify(frame(words)), 'friendship_upgrade_notice')
+        obs = observation(words)
+        self.assertEqual(abyss_classify(obs, True).scene, Scene.FRIENDSHIP_UPGRADE)
+        session = Session(normal_verified=True, expected_floor=58, entered_floor=58,
+                          phase='battle', battle_started_at=1)
+        before = copy.deepcopy(session)
+        action = session.plan(abyss_classify(obs, True), obs)
+        self.assertEqual(action.token.text, '轻触后关闭')
+        self.assertEqual(session, before)
+
+    def test_confirm_is_allowed_only_with_complete_settlement_background(self):
+        for missing in range(2):
+            words = NOTICE + [word for index, word in enumerate(SETTLEMENT_BACKGROUND)
+                              if index != missing]
+            self.assertIsNone(friendship_upgrade_notice_close(words))
+            self.assertEqual(runner.classify(frame(words)), 'unknown_dialog')
+        for change in ({'score': .79}, {'x': 900}, {'y': 500}):
+            words = copy.deepcopy(NOTICE + SETTLEMENT_BACKGROUND)
+            words[-1].update(change)
+            self.assertIsNone(friendship_upgrade_notice_close(words))
+            self.assertEqual(runner.classify(frame(words)), 'unknown_dialog')
+        words = NOTICE + SETTLEMENT_BACKGROUND + [dict(text='确认', x=1440, y=820, score=.99)]
+        self.assertIsNone(friendship_upgrade_notice_close(words))
+        self.assertEqual(runner.classify(frame(words)), 'unknown_dialog')
 
     def test_abyss_closes_current_label_without_mutating_floor_or_wins(self):
         obs = observation(NOTICE + BACKGROUND)
@@ -159,6 +190,22 @@ class FriendshipNoticeTests(unittest.TestCase):
         close = next(w for w in f.words if w['text'] == '轻触后关闭')
         self.assertEqual(action.token.center, (close['x'], close['y']))
         self.assertEqual((session.expected_floor, session.wins), (58, 0))
+
+    def test_private_settlement_background_image_plans_only_foreground_close(self):
+        directory = Path(os.environ.get('EPIC7_FRIENDSHIP_FIXTURES',
+                                        str(Path(__file__).resolve().parents[1] / '.local/friendship-upgrade')))
+        image_path = directory / 'settlement-background.png'
+        if not image_path.is_file():
+            self.skipTest('Private current friendship screenshot is not distributed')
+        image = runner.cv2.imdecode(runner.np.frombuffer(image_path.read_bytes(), runner.np.uint8),
+                                    runner.cv2.IMREAD_COLOR)
+        image = runner.cv2.resize(image, (1600, 900))
+        results, _ = runner.RapidOCR(intra_op_num_threads=2, inter_op_num_threads=2)(image)
+        f = runner.Frame(image, results)
+        self.assertEqual(runner.classify(f), 'friendship_upgrade_notice')
+        target = friendship_upgrade_notice_close(f.words)
+        self.assertEqual(target['text'], '轻触后关闭')
+        self.assertEqual((round(target['x']), round(target['y'])), (947, 698))
 
 
 if __name__ == '__main__':
