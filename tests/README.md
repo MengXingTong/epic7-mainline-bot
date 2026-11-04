@@ -29,3 +29,7 @@ A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI h
 源码依赖由 `install_dependencies.py` 安装到 `vendor`，请使用 `python -B -X utf8 run_offline_tests.py -v` 运行全套测试，保证在导入首个测试前加载依赖目录。GitHub Actions 额外设置 `EPIC7_REQUIRE_GUI_TESTS=1`；Pillow、Tk 或界面导入失败均报错，不再被误判为可跳过的“没有界面运行库”。`test_test_entrypoint.py` 覆盖路径顺序、依赖预检、严格界面模式和失败退出码，使用模拟依赖，不进行游戏下载、打包或游戏输入。
 
 `test_install_dependencies.py` 通过模拟全部下载调用验证直连优先、原代理回退、不修改全局环境和非零退出码，并在隔离子进程中强制 cp1252 重定向输出，确认中文安装提示不会崩溃；不会真正下载或安装依赖。
+
+## 队伍准备页
+
+`test_team_preparation.py` 验证带AUTO与辅助英雄空位两类布局、仅普通单次入场、地图链/体力/历史/弹窗优先、关键落盘和发送不明防重；输入及状态保存均使用模拟对象。可通过 `EPIC7_TEAM_FIXTURES` 指向含 `team.png`、`team-ocr.json` 的本机目录回放报告画面，默认使用本机私有回放目录；缺少文件明确跳过，素材不随源码分发，不操作游戏。

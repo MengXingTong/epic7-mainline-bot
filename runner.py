@@ -13,6 +13,7 @@ from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
+from story_core import team_entry_control
 import copy
 ROOT = data_root()
 for _stream in (sys.stdout,sys.stderr):
@@ -157,7 +158,8 @@ def classify(f):
     if f.find('准备战斗',(1200,750,1599,899)) and f.find('Episode',(50,0,400,90)):
         return 'map'
     if f.find('选择队伍',(1130,750,1599,899)) and f.any('选择辅助英雄'): return 'support'
-    if f.find('进行任务|战斗开始',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'): return 'team'
+    if f.find('进行任务|战斗开始',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'):
+        return 'unknown_dialog' if conf or cancel else 'team'
     if f.find(r'^Episode$',(1300,120,1599,330)) and f.find(r'Rank',(0,0,400,150)): return 'lobby'
     if f.find(r'\d\s*/\s*\d',(140,0,400,85)) or f.find(r'\d+\s*/\s*\d+',(280,770,690,899)):
         return 'battle'
@@ -434,21 +436,20 @@ class Runner:
             if required>100: return self.stop('安全暂停待修复','入场消耗读数异常')
             if available<required: return self.attention('resource','体力不足',f'当前体力 {available} 小于消耗 {required}；手动处理后继续，没有打开兑换框。')
             self.s['stamina']=available
-            hsv=cv2.cvtColor(f.image[650:710,900:1095],cv2.COLOR_BGR2HSV)
-            isauto=np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
-            if not isauto:
-                auto=f.find(r'^AUTO$',(880,625,1100,730))
-                if not auto: return self.stop('安全暂停待修复','无法确认自动战斗开关')
-                self.action('开启自动战斗',auto); return True,2
+            control=team_entry_control(f)
+            if control['kind']=='unknown':return self.stop('安全暂停待修复','未明确识别AUTO控件或辅助英雄空位的普通单次任务布局，请确认当前队伍页')
+            if control['kind']=='enable_auto':
+                self.action('开启自动战斗',control['target']);return True,2
             key=self.ticket['key']
             from entry_journal import can_enter,reserve_entry,finish_dispatch
             from pc_backend import TapNotSent
             if not can_enter(self.s,key): return self.attention('entry_history','该关已有入场记录',f'{key} 已实际开战或发送结果不明；请选择未尝试的新关后继续。')
-            a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time())
+            a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time(),team_entry_mode=control['kind'],team_entry_proof=control['proof'])
             dispatch=reserve_entry(self.s,key,a);self.s['active']=a
             self.s['reason']=f"已验证新关 {key}，本次入场只消耗体力 {required}，绝不兑换"
             self.save() # Durable intent BEFORE the one permitted entry input.
-            try:self.action('进行任务（仅一次入场）',f.find('进行任务',(1300,750,1599,899)))
+            entry=control['target'] if control['kind']=='single_task' else f.find('进行任务',(1300,750,1599,899))
+            try:self.action('进行任务（仅一次入场）',entry)
             except TapNotSent as exc:
                 finish_dispatch(dispatch,'not_sent',str(exc))
                 self.archive_unresolved_active('开战按下前取消，确认未发送；原入场意图与发送结果完整保留')

@@ -8,7 +8,7 @@ sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
 SOURCES+=('client_viewport.py','entry_journal.py','Start.cmd','PCStart.cmd')
-VERSION='1.4.5-preview'
+VERSION='1.4.6-preview'
 
 
 def copy_tree(source,target):
@@ -101,13 +101,17 @@ def build_update(package):
     if archive.exists():raise ValueError('更新压缩包已存在，禁止覆盖。')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.6 修复辅助英雄空位且没有AUTO的队伍页入场；完整布局与普通任务按钮核验后只进行一次普通入场，不操作托管或重复设置。
+从队伍页新开始仍可能先返回当前地图核对关卡；地图/编号、体力、历史、落盘和防重复检查保留。未知布局保持停止，战斗内自动设置未在空位页确认。
+本次仅离线回归与包自检，未新增完整实机战斗验收；更新前停止旧任务和助手，更新后显式开始加载新代码。
 
 v1.4.5 每次启动默认自动识别客户端，保留上次任务；支持实验性 PC 横向最大化客户区与明确黑边映射。
 鼠标/按键接管时先让行，输入空闲后重新取图；普通导航与窗口问题可进入等待处理。

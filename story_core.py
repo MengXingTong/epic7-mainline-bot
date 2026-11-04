@@ -119,8 +119,35 @@ def exit_target(f,clear_overlay=False):
     return dict(x=min(1570,round(float(max(xs))+80)),y=min(710,round(float(np.median(ys)))),dots=len(xs))
 
 def auto_enabled(f):
+    auto=f.find(r'^AUTO$',(880,625,1100,730))
+    if not auto or auto['score']<.90:return False
     hsv=cv2.cvtColor(f.image[650:710,900:1095],cv2.COLOR_BGR2HSV)
     return np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
+
+def team_entry_control(f):
+    """Read the preparation layout; hosted/repeat controls are never tap targets."""
+    unknown=dict(kind='unknown',target=None,proof='队伍页布局或自动战斗控件尚未明确识别')
+    if f.find(r'^(确认|确定|確認|確定|取消)$'):return unknown
+    if f.any('重复战斗','连续战斗','重复进行','托管次数','托管中'):return unknown
+    empty_support=f.find(r'^辅助英雄$',(920,530,1095,625))
+    auto=f.find(r'^AUTO$',(880,625,1100,730))
+    if auto:
+        if auto['score']<.90 or empty_support:return unknown
+        if auto_enabled(f):return dict(kind='auto_on',target=None,proof='旧版AUTO标签及开启状态已核验')
+        return dict(kind='enable_auto',target=auto,proof='旧版AUTO控件可见，等待开启后重新核验')
+    if f.find(r'^AUTO$'):return unknown
+    anchors=[
+        f.find(r'^准备战斗$',(60,10,260,80)),
+        f.find(r'^托管战斗$',(1390,75,1535,150)),
+        f.find(r'^托管战斗$',(750,690,900,765)),
+        f.find(r'^[-−一·—–－]?\s*队伍战斗力$',(300,770,560,835)),
+        f.find(r'^管理队伍$',(25,815,200,899)),
+        empty_support,
+        f.find(r'^进行任务$',(1300,770,1599,899)),
+    ]
+    if not all(w and w['score']>=.90 for w in anchors):return unknown
+    return dict(kind='single_task',target=anchors[-1],
+                proof='已识别无AUTO的辅助英雄空位布局和普通单次任务入口；未操作托管或确认战斗内自动开关')
 
 def entry_cost(f):
     word=f.find(r'^\d+\s*/\s*\d+$',(1180,775,1400,890))
@@ -209,11 +236,11 @@ class StoryController:
             self.r.s.update(status='等待体力自然恢复',reason=f'体力 {available}/{required}；不购买、不兑换，30秒后重新读取。',story_waiting_resource=True)
             self.r.save();return True,30
         self.r.s.pop('story_waiting_resource',None)
-        if not auto_enabled(f):
-            auto=f.find(r'^AUTO$',(880,625,1100,730))
-            if not auto:return self.wait('无法识别自动战斗开关','保留当前队伍，未开始战斗。')
-            return self.act('开启剧情关卡原生自动战斗',auto)
-        intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),proof='当前准备页精确关卡编号、体力与自动战斗开关',evidence=self.r.evidence('story-entry-'+stage['id']))
+        control=team_entry_control(f)
+        if control['kind']=='unknown':return self.wait('队伍页入场方式等待确认','未明确识别AUTO控件或辅助英雄空位的普通单次任务布局；请确认页面后继续。')
+        if control['kind']=='enable_auto':return self.act('开启剧情关卡原生自动战斗',control['target'])
+        if control['kind']=='single_task':word=control['target']
+        intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),team_entry_mode=control['kind'],proof='当前准备页精确关卡编号与体力；'+control['proof'],evidence=self.r.evidence('story-entry-'+stage['id']))
         dispatch=reserve_entry(self.book,intent['id'],intent);self.book['active']=intent
         self.r.save()  # Persist full per-run intent BEFORE the only entry click.
         self.entry_wait_until=time.monotonic()+15;self.ticket=None

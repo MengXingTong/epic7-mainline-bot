@@ -49,7 +49,7 @@ class EntryJournalTests(unittest.TestCase):
 
 
 def team_runner(phase='support'):
-    f=frame([('进行任务',1435,829),('管理队伍',190,100),('新关卡',1300,170),('8/100',1260,827)])
+    f=frame([('进行任务',1435,829),('管理队伍',190,100),('新关卡',1300,170),('8/100',1260,827),('AUTO',990,680)])
     f.image[650:710,900:1095]=(0,200,0)
     r=fake_runner(f)
     r.ticket=dict(key='E4-C1-S4',name='新关卡',phase=phase,verified_epoch=time.time(),episode=4,chapter=1,stage=4)
