@@ -1,7 +1,36 @@
 """Adaptive post-observation pacing, with no input and no stale-frame reuse."""
 import time
 
+OBSERVATION_INTERVAL = .25
+
+class ObservationCycle:
+    """Budget one fresh capture/recognition cycle; never queue catch-up inputs."""
+    def __init__(self, clock=None):
+        self.clock = clock or time.monotonic
+        self.begin()
+
+    def begin(self):
+        self.started = self.clock()
+
+    def wait(self, control):
+        remaining = OBSERVATION_INTERVAL - (self.clock() - self.started)
+        if remaining > 0:
+            control.sleep(remaining)
+
 INTERRUPTS={'capacity_stop','resource_stop','unknown_dialog','defeat','network_error'}
+STABILITY_FALLBACK_SCENES=frozenset({'unknown','unknown_dialog','loading','result_transition'})
+
+def needs_stability_wait(scene, *, victory_verified=False):
+    """Observe uncertain pages; never gate known controls on full-screen motion.
+
+    The classifier and Runner still verify each page, current control and its
+    business guards. A recognized settlement, team or free overlay can contain
+    permanent character/loot animation and incidental OCR changes. Only the
+    uncertain fallback waits for the whole image; resources/defeat are handled
+    immediately. Weak victory text still needs observation until the complete
+    result-only objectives proof is present. This policy never authorizes input.
+    """
+    return scene in STABILITY_FALLBACK_SCENES or (scene=='victory' and not victory_verified)
 
 class ScreenStabilityGate:
     """Wait for consecutive stable observations; movement has no time limit.
@@ -44,8 +73,7 @@ class TransitionPacer:
     def reset(self):self.scene=None;self.until=0
 
 def next_delay(scene,original,acted=False):
-    # Network reconnect backoff is deliberately NOT accelerated.
+    # Business backoff is deliberately NOT accelerated. Ordinary delays are
+    # cycle budgets, not extra sleeps after capture/OCR/persistence finishes.
     if scene in ('network_error','natural_resource_wait'):return original
-    if scene=='battle':return 2.5
-    if scene in ('loading','result_transition','unknown'):return min(original,1.0)
-    return min(original,.45 if acted else .7)
+    return OBSERVATION_INTERVAL

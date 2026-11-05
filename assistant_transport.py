@@ -86,7 +86,9 @@ class UnifiedTransport:
         if self.ensure()!=f.binding:raise PcSafetyError('观察后客户端位置或尺寸发生变化，已停止操作。')
         if f.input_tick is not None and self.input_tick()!=f.input_tick:raise PcSafetyError('检测到手动输入，当前画面校验已失效。')
 
-    def tap(self,f,token,ordinary_gate=False):
+    def tap(self,f,token,ordinary_gate=False,*,press_seconds=None):
+        if press_seconds is not None and self.api is None:
+            raise PcSafetyError('短按点击仅适用于已核验的PC后台消息。')
         self._fresh(f)
         x,y=token.center;w,h=f.image.size
         if not (0<=x<w and 0<=y<h):raise PcSafetyError('点击位置超出游戏客户区，已拒绝操作。')
@@ -99,7 +101,8 @@ class UnifiedTransport:
             self.api.move(px,py);self.check()
             if not self.api.ready(s):raise PcSafetyError('桌面端输入目标已变化，已停止操作。')
             try:
-                self.api.button(True)
+                if press_seconds is None:self.api.button(True)
+                else:self.api.button(True,press_seconds=press_seconds)
             except InputBusy as exc:raise TapNotSent(str(exc)) from exc
             finally:self.api.button(False)
             self.last_input=self.input_tick()

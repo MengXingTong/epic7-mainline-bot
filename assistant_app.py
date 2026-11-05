@@ -10,7 +10,7 @@ from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,
 from assistant_status import activity,scene_caption
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','电脑客户端':'pc'}
-TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7'}
+TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater'}
 
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False):
@@ -60,7 +60,7 @@ class Assistant:
         content=tk.Frame(outer,bg=BG);content.pack(fill='both',expand=True,padx=20,pady=(16,12));outer=content
         tk.Label(outer,text='第七史诗 / 统一推进助手',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
         tk.Label(outer,text='统一推进助手',bg=BG,fg=INK,font=('Microsoft YaHei UI',22,'bold')).pack(anchor='w',pady=(4,2))
-        tk.Label(outer,text='双端适配 · 剧情 / 深渊 / 圣女3-7 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
+        tk.Label(outer,text='剧情 / 深渊 / 圣女3-7 / 月光剧场 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
         connection.columnconfigure(1,weight=1)
         self.client=tk.StringVar(value='自动识别')
@@ -85,7 +85,8 @@ class Assistant:
         self.scene=tk.StringVar(value='—');self.wins=tk.StringVar(value='0');self.elapsed=tk.StringVar(value='00:00')
         for title,var in [('当前界面',self.scene),('本次通关',self.wins),('运行时长',self.elapsed)]:
             cell=tk.Frame(stats,bg=CARD);cell.pack(side='left',fill='x',expand=True)
-            tk.Label(cell,text=title,bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(anchor='w')
+            caption=tk.Label(cell,text=title,bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9));caption.pack(anchor='w')
+            if title=='本次通关':self.wins_caption=caption
             tk.Label(cell,textvariable=var,bg=CARD,fg=INK,font=('Microsoft YaHei UI',10),wraplength=210,justify='left').pack(anchor='w',pady=(3,0))
         preview_card=self.card(outer)
         tk.Label(preview_card,text='客户端画面',bg=CARD,fg=INK,font=('Microsoft YaHei UI',10,'bold')).pack(anchor='w')
@@ -105,7 +106,7 @@ class Assistant:
         self.logs=tk.Text(outer,height=3,bg='#e9efeb',fg=MUTED,font=('Microsoft YaHei UI',9),relief='flat',padx=9,pady=7,wrap='word',state='disabled')
         self.logs.pack(fill='both',expand=True)
         self.update_note();self.update_buttons();self.update_activity()
-        if not ui_check:root.after(300,self.scan);root.after(200,self.pump)
+        if not ui_check:root.after(300,self.initial_scan);root.after(200,self.pump)
 
     def card(self,parent):
         border=tk.Frame(parent,bg=CARD,highlightbackground=LINE,highlightthickness=1);border.pack(fill='x',pady=(0,10))
@@ -150,12 +151,17 @@ class Assistant:
         else:self.instance.set('检测到多个目标，请手动选择')
         self.update_note()
     def update_note(self):
+        if hasattr(self,'wins_caption'):self.wins_caption.configure(text='本次观览' if TASKS[self.task.get()]=='theater' else '本次通关')
         try:target=self.selected_target();client=target['client']
         except ValueError:client=CLIENTS.get(self.client.get())
         if client=='mumu':
             text='MuMu 使用 ADB，不占电脑鼠标和焦点；模拟器内需保持游戏打开。'
             if TASKS[self.task.get()]=='abyss':text+=' MuMu深渊尚未实机验收，无法确认界面时停止。'
         else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化；鼠标移入游戏时让行，移出后继续。'
+        if TASKS[self.task.get()]=='dimension':
+            text+=' 次元探查仅完成部分导航验收，路线、抉择、招募与通关待实测；新界面留证后等待处理，不自动重打。'
+        if TASKS[self.task.get()]=='theater':
+            text+=' 月光剧场仅实验性 PC 后台：先手动打开剧场列表；每集仅允许明确的一张剧场门票，不购买。逐帧识别剧情翻页，战斗等待；剧目/集数或完成证据不完整则等待处理，整集与跨剧目尚未实机验收。'
         if not self.settings.get('data_dir'):
             text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
         elif TASKS[self.task.get()] in ('mainline','saint_3_7'):
@@ -206,6 +212,9 @@ class Assistant:
         for widget in (self.client_box,self.target_box,self.task_box):widget.configure(state='disabled' if locked else 'readonly')
         self.refresh_button.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
+    def initial_scan(self):
+        # A failed explicit resume must remain visible, never become idle.
+        if self.mode=='idle' and self.process is None and self.run_id is None:self.scan()
     def scan(self):
         if self.scanning or (self.process and self.process.poll() is None):return
         self.scanning=True;self.update_buttons();self.refresh_button.configure(state='disabled')
@@ -234,19 +243,41 @@ class Assistant:
             self.run_id=uuid.uuid4().hex;self.run_dir=HOME/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
             request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'user_selected_profile':not self.read_only,'requested_at':time.time()}
             atomic_json(self.run_dir/'request.json',request);self.command('run')
-            self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
-            atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
-            self.worker_warning='';self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
-            child=self.process
-            def reader():
-                with (self.run_dir/'worker.log').open('a',encoding='utf-8') as log:
-                    for line in child.stdout:
-                        log.write(line);log.flush()
-                        try:self.events.put(('worker',json.loads(line)))
-                        except ValueError:self.events.put(('log',line.strip()))
-                self.events.put(('exit',child.pid))
-            threading.Thread(target=reader,daemon=True).start()
+            self.launch_worker(request)
         except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
+    def launch_worker(self,request):
+        py=request['settings']['worker_python']
+        self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
+        atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
+        self.worker_warning='';self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
+        child=self.process
+        def reader():
+            with (self.run_dir/'worker.log').open('a',encoding='utf-8') as log:
+                for line in child.stdout:
+                    log.write(line);log.flush()
+                    try:self.events.put(('worker',json.loads(line)))
+                    except ValueError:self.events.put(('log',line.strip()))
+            self.events.put(('exit',child.pid))
+        threading.Thread(target=reader,daemon=True).start()
+    def resume_existing(self,run_id):
+        """Explicit maintenance command; never fall back to a fresh Start."""
+        try:
+            if self.ui_check or self.read_only or (self.process and self.process.poll() is None):
+                raise ValueError('当前界面不能执行原run维护重载。')
+            from assistant_config import load_theater_resume_request
+            request=load_theater_resume_request(run_id)
+            if not Path(request['settings'].get('worker_python','')).is_file():
+                raise ValueError('原工作运行库不存在；不重载、不改控制命令。')
+            self.settings=dict(request['settings'])
+            self.client.set(next(k for k,v in CLIENTS.items() if v==self.settings['client']))
+            self.task.set(next(k for k,v in TASKS.items() if v==self.settings['task']))
+            self.targets=[request['target']];self.filter_targets()
+            self.run_id=request['run_id'];self.run_dir=Path(request['run_dir'])
+            self.command('run')
+            self.launch_worker(request)
+            self.log('已按明确维护指令重载原run；未更换请求、进度或观览链。')
+        except Exception as exc:
+            self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
     def command(self,action):
         if self.run_dir:atomic_json(self.run_dir/'control.json',{'run_id':self.run_id,'action':action,'command_id':uuid.uuid4().hex})
     def pause(self):
@@ -316,18 +347,24 @@ class Assistant:
 
 
 def main():
-    ap=ChineseArgumentParser();ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7'));args=ap.parse_args()
+    ap=ChineseArgumentParser();ap.add_argument('--resume-run');ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater'));args=ap.parse_args()
+    if args.resume_run and (args.autostart or args.ui_check or args.ui_exercise or args.task or args.client):
+        ap.error('--resume-run不能与新开始、界面测试或改选目标组合。')
     locks=[]
     if not args.ui_check:
         kernel=ctypes.WinDLL('kernel32',use_last_error=True);kernel.CreateMutexW.argtypes=[ctypes.c_void_p,ctypes.c_bool,ctypes.c_wchar_p];kernel.CreateMutexW.restype=ctypes.c_void_p
         for name in ('Local\\Epic7UnifiedAssistant','Local\\EpicSevenAbyssPilot.Panel'):
             handle=kernel.CreateMutexW(None,False,name)
-            if not handle or ctypes.get_last_error()==183:return
+            if not handle:raise ctypes.WinError(ctypes.get_last_error())
+            if ctypes.get_last_error()==183:
+                ctypes.windll.user32.MessageBoxW(None,'助手已经在运行。请在任务栏找到“第七史诗 · 统一推进助手”窗口。\n请先在原助手里暂停或停止任务，再关闭并重新打开。','第七史诗 · 统一推进助手',0x40)
+                return
             locks.append(handle)
     root=tk.Tk();app=Assistant(root,args.ui_check,read_only=args.ui_exercise)
     if args.client:app.client.set(next(k for k,v in CLIENTS.items() if v==args.client))
     if args.task:app.task.set(next(k for k,v in TASKS.items() if v==args.task))
     app.update_note()
+    if args.resume_run:root.after(0,lambda:app.resume_existing(args.resume_run))
     if args.autostart and not args.ui_check and not args.ui_exercise:
         deadline=time.monotonic()+90
         def start_selected_once():

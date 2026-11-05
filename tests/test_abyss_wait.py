@@ -106,8 +106,9 @@ class BattleWorkerWaitTests(unittest.TestCase):
             return control, session, clock[0] - 1300
 
     def test_start_mid_battle_keeps_waiting_beyond_fifteen_seconds(self):
-        control, session, elapsed = self.run_frames([observation(battle=True) for _ in range(10)])
-        self.assertGreater(elapsed, 15)
+        control, session, elapsed = self.run_frames([observation(battle=True) for _ in range(64)])
+        self.assertAlmostEqual(elapsed, 16)
+        self.assertTrue(all(call.args == (.25,) for call in control.sleep.call_args_list))
         self.assertEqual(session.phase, 'battle')
         self.assertIsNone(session.expected_floor)
         self.assertTrue(all(call.kwargs['wins'] == 0 for call in control.status.call_args_list))
@@ -115,8 +116,9 @@ class BattleWorkerWaitTests(unittest.TestCase):
         self.assertEqual(control.status.call_args.kwargs['scene'], Scene.BATTLE.value)
 
     def test_unknown_frames_wait_without_claiming_game_is_unresponsive(self):
-        control, _, elapsed = self.run_frames([observation() for _ in range(20)])
-        self.assertGreater(elapsed, 15)
+        control, _, elapsed = self.run_frames([observation() for _ in range(64)])
+        self.assertAlmostEqual(elapsed, 16)
+        self.assertTrue(all(call.args == (.25,) for call in control.sleep.call_args_list))
         self.assertEqual(control.status.call_args.args[0], '正在识别当前画面，暂不操作。')
         self.assertTrue(all(call.kwargs['mode'] == 'run' for call in control.status.call_args_list))
 

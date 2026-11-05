@@ -49,6 +49,23 @@ def battle_settlement_confirm(words,width=1600,height=900):
     return None
 
 
+def date_change_notice_close(words,width=1600,height=900):
+    """Close only the date-change notice that explicitly returns to the lobby."""
+    rows=[(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).casefold(),
+           w['x']/width,w['y']/height,w) for w in words]
+    if any(text in ('确认','确定','確認','確定','取消','취소','failed','defeat') or any(v in text for v in
+           ('购买','兑换','复活','是否消耗','是否使用','消耗道具','使用道具','战斗失败','挑战失败','闯关失败','任务失败','任務失敗'))
+           for text,x,y,w in rows):return None
+    confident=[row for row in rows if row[3].get('score',1)>=.85]
+    heading=any(text=='变更日期' and .3<x<.7 and .2<y<.4 for text,x,y,w in confident)
+    caption=any(text=='日期变更将前往大厅' and .3<x<.7 and .38<y<.6 for text,x,y,w in confident)
+    close=[row for row in rows if row[0]=='点击关闭']
+    if heading and caption and len(close)==1:
+        text,x,y,word=close[0]
+        if word.get('score',1)>=.85 and .3<x<.7 and .55<y<.8:return word
+    return None
+
+
 def friendship_upgrade_notice_close(words,width=1600,height=900):
     """Dismiss the free friendship notice at its current, observed close label."""
     translate=str.maketrans({'親':'亲','級':'级','輕':'轻','觸':'触','後':'后',

@@ -15,7 +15,7 @@ from assistant_worker import mainline_run, PlanningFrameGate, StopRun
 from pc_backend import PcBackend, PcSafetyError, FrameExpired, NavigationFrameExpired, InputDeliveryError, WindowSnapshot
 from task_blockers import TaskAttention
 from task_overlays import battle_settlement_confirm
-from task_timing import ScreenStabilityGate
+from task_timing import ScreenStabilityGate,needs_stability_wait
 
 
 RESULT = [('获得的道具', 1453, 60), ('战斗结果', 1260, 825), ('确认', 1442, 825)]
@@ -28,7 +28,62 @@ def frame(words):
     return runner.Frame(runner.np.full((900, 1600, 3), 50, runner.np.uint8), rows)
 
 
+def victory_frame(banner='CLEAR', shade=50, extra=()):
+    f = frame([('3/3', 212, 26), (banner, 807, 559),
+               ('关卡任务', 364, 718), ('关卡任务', 782, 718), ('关卡任务', 1202, 718),
+               ('闯关成功', 364, 749), *extra])
+    f.image[:] = shade
+    f.image[700:730, 275:305] = (0, 180, 0)
+    return f
+
+
+class VictoryControlTests(unittest.TestCase):
+    def test_result_objectives_outrank_shared_legacy_clear_banner(self):
+        from story_core import clear_banner
+        for banner in ('CLEAR', 'C L E A R', 'C L', ''):
+            with self.subTest(banner=banner):
+                f = victory_frame(banner)
+                if banner in ('CLEAR', 'C L E A R'):self.assertTrue(clear_banner(f))
+                self.assertTrue(runner.victory_objectives_verified(f))
+                self.assertEqual(runner.classify(f), 'victory')
+
+    def test_only_complete_objectives_allow_victory_to_bypass_stability(self):
+        self.assertTrue(needs_stability_wait('victory'))
+        self.assertFalse(needs_stability_wait('victory', victory_verified=True))
+        self.assertTrue(needs_stability_wait('unknown_dialog', victory_verified=True))
+        for index in range(2, 6):
+            f = victory_frame('')
+            f.words.pop(index)
+            self.assertFalse(runner.victory_objectives_verified(f))
+        f = victory_frame(''); f.image[680:755, 245:320] = 0
+        self.assertFalse(runner.victory_objectives_verified(f))
+
+    def test_resources_defeat_and_unknown_confirm_still_veto_victory(self):
+        for text, scene in [('购买体力', 'resource_stop'), ('装备背包已满', 'capacity_stop'),
+                            ('战斗失败', 'defeat'), ('确认', 'unknown_dialog')]:
+            f = victory_frame(extra=[(text, 800, 450)])
+            self.assertTrue(runner.victory_objectives_verified(f))
+            self.assertEqual(runner.classify(f), scene)
+
+    def test_legacy_clear_without_result_objectives_keeps_legacy_handler(self):
+        f = frame([('3/3', 212, 26), ('CLEAR', 807, 559)])
+        self.assertFalse(runner.victory_objectives_verified(f))
+        self.assertEqual(runner.classify(f), 'legacy_story_clear')
+        self.assertFalse(needs_stability_wait(runner.classify(f)))
+
+
 class StabilityGateTests(unittest.TestCase):
+    def test_known_pages_and_business_guards_outrank_full_screen_animation_wait(self):
+        for scene in ('story','skip_confirm','tutorial_skip','tutorial_skip_confirm',
+                      'settlement','story_reward','unlock_notice','bond_notice','rankup',
+                      'rankup_splash','account_upgrade_notice','friendship_upgrade_notice',
+                      'friend_decline','lobby','map','support','team','legacy_story_map',
+                      'legacy_story_regions','legacy_story_clear','legacy_story_exit','post_clear_exit',
+                      'battle','capacity_stop','resource_stop','defeat','network_error'):
+            self.assertFalse(needs_stability_wait(scene),scene)
+        for scene in ('unknown','unknown_dialog','loading','result_transition'):
+            self.assertTrue(needs_stability_wait(scene),scene)
+
     def test_transient_dialog_waits_without_reclassifying_it_as_success(self):
         clock = [0.0]; gate = ScreenStabilityGate(lambda: clock[0]); im = frame(TRANSITION).image
         self.assertEqual(runner.classify(frame(TRANSITION)), 'unknown_dialog')
@@ -195,16 +250,18 @@ class LateNavigationExpiryTests(unittest.TestCase):
 
 
 class WorkerSequenceTests(unittest.TestCase):
-    def exercise(self, frames, *, pc=False, ensure_errors=(), step_error=None, stop_on_sleep=False, late_navigation=False):
+    def exercise(self, frames, *, pc=False, ensure_errors=(), step_error=None, stop_on_sleep=False, late_navigation=False, initial_state=None):
         instances = []; clock = [0.0]; readings = iter(frames)
         original = {'attempted': {'current': {'keep': True}}, 'completed': {},
                     'active': {'key': 'current'}, 'last_cleared': {'key': 'older'}}
+        if initial_state is not None:original = copy.deepcopy(initial_state)
         class FakeRunner(runner.Runner):
             def __init__(self, **kwargs):
                 self.s = copy.deepcopy(original); self.cfg = {'start_policy': 'current_screen'}
                 self.pc = None; self.ticket = None; self.last_mode = None; self.mode_since = time.time()
                 self.unknown_gestures = 0; self.input_sequence = 0; self.seen = []
-                self.action = Mock(); self.save = Mock(); self.evidence = Mock(return_value='synthetic.png')
+                self.action = Mock(side_effect=lambda *a,**k:setattr(self,'input_sequence',self.input_sequence+1))
+                self.save = Mock(); self.evidence = Mock(return_value='synthetic.png')
                 instances.append(self)
             def start_current_screen(self):pass
             def capture(self):
@@ -296,6 +353,113 @@ class WorkerSequenceTests(unittest.TestCase):
         self.assertEqual(r.seen, []); self.assertEqual(r.s, original)
         r.action.assert_not_called(); ctl.attention.assert_not_called()
         self.assertTrue(all(c.kwargs['mode']=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_animated_story_background_cannot_starve_verified_skip(self):
+        dark=frame([('跳过',1500,35)]);bright=frame([('跳过',1500,35)]);bright.image[:]=150
+        r,ctl,_=self.exercise([dark,bright])
+        self.assertEqual(r.seen,['story']);r.action.assert_called_once()
+        self.assertEqual(r.action.call_args.args[0],'跳过剧情')
+        self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_animated_skip_confirmation_cannot_starve_verified_confirm(self):
+        words=[('跳过故事',800,400),('确认',800,500)]
+        dark=frame(words);bright=frame(words);bright.image[:]=150
+        r,ctl,_=self.exercise([dark,bright])
+        self.assertEqual(r.seen,['skip_confirm']);r.action.assert_called_once()
+        self.assertEqual(r.action.call_args.args[0],'确认跳过剧情')
+        self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_animated_victory_and_clear_ocr_flicker_reach_continue_without_completion(self):
+        r, ctl, original = self.exercise([victory_frame(), victory_frame('C L', 150)])
+        self.assertEqual(r.seen, ['victory']); r.action.assert_called_once()
+        self.assertEqual(r.action.call_args.kwargs['xy'], (1550, 845))
+        self.assertTrue(r.s['active']['victory_seen'])
+        self.assertEqual(r.s['completed'], {}); self.assertEqual(r.s['attempted'], original['attempted'])
+        self.assertEqual(r.s['last_cleared'], original['last_cleared'])
+        self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_victory_then_independent_settlement_completes_only_at_settlement(self):
+        r, ctl, original = self.exercise([victory_frame(), frame(RESULT), frame(RESULT)])
+        self.assertEqual(r.seen, ['victory', 'settlement']); ctl.attention.assert_not_called()
+        self.assertEqual(list(r.s['completed']), ['current']); self.assertIsNone(r.s['active'])
+        self.assertEqual(r.s['attempted'], original['attempted']); self.assertEqual(r.action.call_count, 2)
+        self.assertEqual(r.action.call_args.args[1]['text'], '确认')
+
+    def test_current_screen_victory_never_completes_archived_entry(self):
+        original = {'attempted': {'archived': {'keep': True}}, 'completed': {}, 'active': None,
+                    'last_cleared': {'key': 'older'}, 'unresolved_entries': [{'entry': {'key': 'archived'}}]}
+        r, ctl, _ = self.exercise([victory_frame(), frame(RESULT), frame(RESULT)], initial_state=original)
+        self.assertEqual(r.seen, ['victory', 'settlement']); self.assertEqual(r.action.call_count, 2)
+        ctl.attention.assert_not_called()
+        for key in original:self.assertEqual(r.s[key], original[key])
+
+    def test_victory_priority_still_recaptures_expired_frame_and_rejects_geometry(self):
+        r, ctl, _ = self.exercise([victory_frame(), victory_frame('C L', 150)], pc=True,
+                                  ensure_errors=[FrameExpired(), None])
+        self.assertEqual(r.seen, ['victory']); r.action.assert_called_once(); ctl.attention.assert_not_called()
+        r, ctl, original = self.exercise([victory_frame()], pc=True,
+                                         ensure_errors=[PcSafetyError('geometry changed')])
+        self.assertEqual(r.seen, []); r.action.assert_not_called(); self.assertEqual(r.s, original)
+        self.assertEqual(ctl.attention.call_args.args[0].code, 'client_input')
+
+    def test_animated_unknown_confirm_over_victory_still_waits_with_zero_input(self):
+        frames = [victory_frame(shade=shade, extra=[('确认', 800, 450)]) for shade in (50, 150)*10]
+        r, ctl, original = self.exercise(frames)
+        self.assertEqual(r.seen, []); self.assertEqual(r.s, original)
+        r.action.assert_not_called(); ctl.attention.assert_not_called()
+
+    def test_victory_without_complete_objectives_still_waits_for_stability(self):
+        words = [('CLEAR', 807, 559), ('关卡任务', 364, 718), ('闯关成功', 364, 749)]
+        dark = frame(words); bright = frame(words); bright.image[:] = 150
+        self.assertEqual(runner.classify(dark), 'victory')
+        r, ctl, original = self.exercise([dark, bright]*10)
+        self.assertEqual(r.seen, []); self.assertEqual(r.s, original)
+        r.action.assert_not_called(); ctl.attention.assert_not_called()
+
+    def test_animated_settlement_with_changing_incidental_ocr_confirms_on_first_frame(self):
+        dark = frame(RESULT+[('MVP', 200, 210), ('exp+15600', 180, 90)])
+        bright = frame(RESULT+[('MVP', 205, 212), ('装饰文字', 400, 400)])
+        bright.image[:] = 150
+        r, ctl, original = self.exercise([dark, bright])
+        self.assertEqual(r.seen, ['settlement']); r.action.assert_called_once()
+        self.assertEqual(r.action.call_args.args[1]['text'], '确认')
+        self.assertEqual(list(r.s['completed']), ['current'])
+        self.assertEqual(r.s['attempted'], original['attempted'])
+        self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_known_free_controls_do_not_wait_for_animated_characters_or_background(self):
+        cases = [
+            ([('故事完成奖励已正常发放',800,300),('点击关闭',800,600)], 'story_reward'),
+            ([('支线故事通知',800,200),('已解锁 支线故事一览',800,320),('点击关闭',800,650)], 'unlock_notice'),
+            ([('升级！',800,230),('账号升等，行动力上限已提升',800,400),('点击关闭',800,650)], 'account_upgrade_notice'),
+            ([('英雄亲密度等级上升',800,230),('轻触后关闭',800,650)], 'friendship_upgrade_notice'),
+            ([('变更日期',800,270),('日期变更，将前往大厅。',802,448),('点击关闭',802,599)], 'date_change_notice'),
+        ]
+        for words, scene in cases:
+            with self.subTest(scene=scene):
+                dark = frame(words); bright = frame(words); bright.image[:] = 150
+                r, ctl, original = self.exercise([dark, bright])
+                self.assertEqual(r.seen, [scene]); r.action.assert_called_once()
+                self.assertEqual(r.s['completed'], original['completed'])
+                self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
+
+    def test_business_interrupts_are_handled_on_first_moving_frame_without_input(self):
+        for text, scene, code in [('购买体力','resource_stop','resource'),('装备背包已满','capacity_stop','equipment')]:
+            with self.subTest(scene=scene):
+                f = frame(RESULT+[(text,800,400)])
+                r, ctl, original = self.exercise([f])
+                self.assertEqual(r.seen,[scene]); r.action.assert_not_called()
+                self.assertEqual(ctl.attention.call_args.args[0].code, code)
+                for key in original:self.assertEqual(r.s[key],original[key])
+
+    def test_animated_settlement_keeps_freshness_and_target_guards_before_confirm(self):
+        r, ctl, original = self.exercise([frame(RESULT)], pc=True,
+                                         ensure_errors=[PcSafetyError('geometry changed')])
+        self.assertEqual(r.seen, []); r.action.assert_not_called(); self.assertEqual(r.s, original)
+        self.assertEqual(ctl.attention.call_args.args[0].code, 'client_input')
+        r, ctl, _ = self.exercise([frame(RESULT), frame(RESULT)], pc=True,
+                                  ensure_errors=[FrameExpired(),None])
+        self.assertEqual(r.seen,['settlement']); r.action.assert_called_once(); ctl.attention.assert_not_called()
 
 
 if __name__ == '__main__':unittest.main()

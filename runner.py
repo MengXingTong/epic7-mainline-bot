@@ -10,7 +10,7 @@ sys.path.insert(0, str(CODE_ROOT / 'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
-from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES,battle_settlement_confirm
+from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES,battle_settlement_confirm,date_change_notice_close
 from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 from story_core import team_entry_control
@@ -118,6 +118,22 @@ def victory_objectives_verified(f):
     green=(hsv[:,:,0]>=32)&(hsv[:,:,0]<=85)&(hsv[:,:,1]>115)&(hsv[:,:,2]>100)
     return int(np.count_nonzero(green))>=100
 
+def mainline_map_control(f):
+    """Return the one positively identified mainline map action.
+
+    Battle nodes and zero-stamina story nodes share the Episode map layout but
+    use different lower-right controls.  This only identifies the page/control;
+    map_ticket still requires the chapter and blue selected node before input.
+    A generic story label elsewhere never receives input.
+    """
+    if not f.find(r'^Episode\s*\d+$',(50,0,430,90)):return None
+    candidates=[]
+    battle=f.find('准备战斗',(1200,750,1599,899))
+    story=f.find(r'^(观看故事|观看剧情)$',(1200,750,1599,899))
+    if battle:candidates.append(dict(kind='battle',target=battle))
+    if story and story['score']>=.85:candidates.append(dict(kind='story_only',target=story))
+    return candidates[0] if len(candidates)==1 else None
+
 def classify(f):
     # Vetoes are ordered before EVERY action, including every kind of confirmation.
     if capacity_blocker(w['text'] for w in f.words):return 'capacity_stop'
@@ -135,6 +151,8 @@ def classify(f):
     failure_banner=norm(''.join(w['text'] for w in f.words if 280<w['x']<1340 and 120<w['y']<640))
     if (any(norm(t) in failure_banner for t in ('FAILED','DEFEAT','战斗失败','挑战失败','闯关失败','任務失敗','任务失败'))
         or (f.any('再次挑战','重新挑战','再挑战') and not f.any('获得的道具','任务成功','闯关成功'))): return 'defeat'
+    if date_change_notice_close(f.words):return 'date_change_notice'
+    if f.any('变更日期','日期变更'):return 'unknown_dialog'
     if f.any(*FRIENDSHIP_TITLES,'轻触后关闭','輕觸後關閉'):return 'unknown_dialog'
     if f.any('给予协助的朋友') and f.any('发送好友申请') and f.find(r'^取消$',(500,570,800,720)) and f.find(r'^申请$',(800,570,1100,720)): return 'friend_decline'
     if conf and ('跳过教学' in middle or '跳过教學' in middle): return 'tutorial_skip_confirm'
@@ -149,15 +167,19 @@ def classify(f):
     if f.any('故事完成奖励已正常发放','获得星星奖励已正常发放') and f.find('点击关闭',(500,500,1100,720)): return 'story_reward'
     if f.any('支线故事通知') and f.any('已解锁') and f.any('支线故事一览') and f.find('点击关闭',(500,550,1100,780)): return 'unlock_notice'
     if f.any('解锁缘分') and f.any('结下缘分') and f.find(r'^OK$',(600,550,1000,720)): return 'bond_notice'
+    # An incomplete closeable modal must never expose its underlying map/team.
+    if f.find(r'^(点击关闭|點擊關閉)$'):return 'unknown_dialog'
     if legacy_region_cards(f):return 'legacy_story_regions'
     if legacy_map_info(f):return 'legacy_story_map'
+    # Mainline results share CLEAR and the final-wave HUD with legacy story
+    # banners. Result-only objectives must win even as CLEAR OCR flickers.
+    if victory_objectives_verified(f):return 'victory'
     if legacy_clear_banner(f):return 'legacy_story_clear'
     if legacy_exit_target(f):return 'legacy_story_exit'
     if f.find(r'^离开$',(50,750,230,899)) and f.find(r'^大厅$',(250,750,430,899)) and f.find(r'^重新进行$',(1300,750,1599,899)): return 'post_clear_exit'
     if f.find(r'跳过', (1400,0,1599,100)): return 'story'
-    if (f.any('CLEAR','VICTORY') and f.any('关卡任务') and f.any('闯关成功')) or victory_objectives_verified(f): return 'victory'
-    if f.find('准备战斗',(1200,750,1599,899)) and f.find('Episode',(50,0,400,90)):
-        return 'map'
+    if f.any('CLEAR','VICTORY') and f.any('关卡任务') and f.any('闯关成功'): return 'victory'
+    if mainline_map_control(f):return 'map'
     if f.find('选择队伍',(1130,750,1599,899)) and f.any('选择辅助英雄'): return 'support'
     if f.find('进行任务|战斗开始',(1150,750,1599,899)) and f.any('队伍战斗力','管理队伍'):
         return 'unknown_dialog' if conf or cancel else 'team'
@@ -316,6 +338,25 @@ class Runner:
         if node['completion']=='conflict':return d,rows,'当前通关标记不一致'
         if is_cleared(node):return d,rows,'已通关绿色勾' if node['clear_badge'] else '已通关关卡星级'
         return d,rows,'未通关蓝色当前节点'
+    def open_story_node(self,d,target):
+        """Persist a no-cost story attempt before its only allowed click."""
+        from entry_journal import reserve_entry,finish_dispatch
+        from pc_backend import TapNotSent
+        key=d['key']
+        a=dict(self.ticket or d,cost=0,started_at=now(),start_epoch=time.time(),entry_kind='story_only',
+               entry_proof='当前Episode、章节、蓝色选中节点与右下角观看故事控件')
+        dispatch=reserve_entry(self.s,key,a);self.s['active']=a
+        self.s['reason']=f'已验证纯剧情节点 {key}；零体力，只观看一次，不重复'
+        self.save()  # Durable intent BEFORE the only story-node click.
+        try:self.action('观看故事（仅一次）',target)
+        except TapNotSent as exc:
+            finish_dispatch(dispatch,'not_sent',str(exc))
+            self.archive_unresolved_active('观看故事按下前取消，确认未发送；原意图与发送结果完整保留')
+            self.s.update(status='观看故事点击尚未发送',reason='鼠标接管时取消了点击；移出后点继续，重新核对当前节点。')
+            self.save()
+            raise TaskAttention('entry_not_sent',self.s['status'],self.s['reason']) from exc
+        finish_dispatch(dispatch,'sent');self.save();self.ticket=None
+        return True,3
     def title_matches(self,f):
         if not self.ticket: return False
         target=norm(self.ticket['name']); titlewords=[w for w in f.words if 1140<w['x']<1560 and 145<w['y']<195]
@@ -343,6 +384,9 @@ class Runner:
         if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
         if mode=='friendship_upgrade_notice':
             self.action('关闭免费英雄亲密度提升提示',friendship_upgrade_notice_close(f.words));return True,1
+        if mode=='date_change_notice':
+            self.ticket=None
+            self.action('关闭日期变更通知，按游戏提示返回大厅',date_change_notice_close(f.words));return True,3
         if getattr(self,'story',None):
             result=self.story.step(f,mode)
             if result is not None:return result
@@ -389,12 +433,21 @@ class Runner:
                 else:return self.stop('安全暂停待修复','未见结算即返回大厅；保留已尝试记录，不重新开同一关')
             self.action('从大厅进入主线章节',f.find(r'^Episode$',(1300,120,1599,330))); return True,4
         if mode=='map':
+            control=mainline_map_control(f)
             d,rows,proof=self.map_ticket(f)
             if not d:
                 if age<20: self.save(); return True,4
                 return self.stop('安全暂停待修复',proof)
             self.s['map_verification']=dict(target=d,proof=proof,rows=rows)
             a=self.s.get('active')
+            if a and a.get('entry_kind')=='story_only':
+                oldrow=next((r for r in rows if r['stage']==a['stage']),None)
+                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and is_cleared(oldrow):
+                    self.completed('返回地图后，纯剧情节点出现绿色已通关勾');a=None
+                elif time.time()-a['start_epoch']<20:
+                    self.s['reason']='观看故事已发送一次，等待剧情播放或地图通关标记；不重复点击';self.save();return True,.7
+                else:
+                    return self.attention('story_result','剧情节点结果尚未确认','观看故事已发送一次，但当前地图没有该节点的明确通关勾；保留尝试记录，不重复观看。')
             if a and self.cfg.get('start_policy')=='current_screen':
                 self.archive_unresolved_active('从当前地图选择新关；不回查原关是否通关');a=None
             if a:
@@ -424,7 +477,9 @@ class Runner:
             self.ticket=d; self.ticket['proof']=proof; self.ticket['evidence']=self.evidence('preflight-'+d['key']); self.ticket['phase']='map'
             self.s['verified']=self.ticket; self.s['last_stage']=d['key']
             event('preflight',target=self.ticket)
-            self.action('未通关验证通过，准备战斗',f.find('准备战斗',(1200,750,1599,899))); return True,3
+            if control and control['kind']=='story_only':return self.open_story_node(d,control['target'])
+            target=control['target'] if control else f.find('准备战斗',(1200,750,1599,899))
+            self.action('未通关验证通过，准备战斗',target); return True,3
         if mode=='support':
             if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('辅助界面没有本轮新关验证凭据'); return True,3

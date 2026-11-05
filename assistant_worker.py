@@ -7,7 +7,7 @@ sys.path.insert(1,str(Path(__file__).resolve().parent/'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention
-from task_timing import TransitionPacer,next_delay,ScreenStabilityGate
+from task_timing import TransitionPacer,next_delay,ScreenStabilityGate,needs_stability_wait,ObservationCycle
 from pc_backend import PcSafetyError,InputBusy,FrameExpired,NavigationFrameExpired
 
 class StopRun(Exception):pass
@@ -95,10 +95,11 @@ def wait_for_input(control,backend,*args):
     return True
 
 
-def capture_fresh(capture,control,clock=time.monotonic):
+def capture_fresh(capture,control,clock=time.monotonic,blank_budget=10):
     from pc_message_backend import CaptureUnavailable
-    since=None
+    since=None;cycle=ObservationCycle()
     while True:
+        cycle.begin()
         control.check()
         try:
             result=capture()
@@ -107,12 +108,12 @@ def capture_fresh(capture,control,clock=time.monotonic):
         except CaptureUnavailable:
             now=clock()
             if since is None:since=now
-            if now-since>=10:
+            if now-since>=blank_budget:
                 control.attention(TaskAttention('capture','暂时取不到游戏画面','请保持游戏窗口未最小化，处理后继续；不会抢焦点或在黑帧上点击。'))
                 since=None
             else:
                 control.status('切屏期间暂未取得画面，正在重新取图；不点击、不切换前台。',mode='recovering')
-                control.sleep(.4)
+                cycle.wait(control)
 
 
 class PlanningFrameGate:
@@ -200,8 +201,10 @@ def abyss_run(request,control):
     if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
     previous=None;stable=0;cooldown=0;cooldown_scene=None;dialog_stability=ScreenStabilityGate()
+    cycle=ObservationCycle()
     while True:
         try:
+            cycle.begin()
             control.check();snap=capture_fresh(transport.capture,control);image=snap.image
             obs=read_abyss_observation(image,ocr,bank,snap.captured_at)
             reading=classify(obs,session.normal_verified or settings['observe'])
@@ -219,21 +222,21 @@ def abyss_run(request,control):
             previous=signature
             if settings['observe']:
                 if request.get('once'):return
-                control.sleep(1);continue
+                cycle.wait(control);continue
             if reading.scene in (Scene.BLOCKED,Scene.CAPACITY):
                 if wait_for_input(control,transport,snap):
                     dialog_stability.reset();previous=None;stable=0;continue
                 words=[dict(text=t.text,x=t.center[0],y=t.center[1],score=t.score) for t in obs.tokens]
                 if dialog_stability.waiting('unknown_dialog',image,words,obs.width,obs.height):
                     control.status('正在等待弹窗稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=reading.scene.value,wins=session.wins)
-                    control.sleep(.4);continue
+                    cycle.wait(control);continue
             else:dialog_stability.reset()
             if reading.scene in (Scene.HARD,Scene.DEFEAT,Scene.BLOCKED,Scene.CAPACITY):session.plan(reading,obs)
             if reading.scene==Scene.UNKNOWN:
                 # No input is pending. Keep observing instead of treating OCR gaps
                 # or long animations as a hung game; Stop/target guards still apply.
-                control.sleep(1);continue
-            if stable<2 or (reading.scene==cooldown_scene and time.monotonic()<cooldown):control.sleep(.4);continue
+                cycle.wait(control);continue
+            if stable<2 or (reading.scene==cooldown_scene and time.monotonic()<cooldown):cycle.wait(control);continue
             if reading.scene==Scene.CLEAR and reading.floor is not None:
                 ledger['completed'].setdefault(str(reading.floor),{'observed_clear_at':time.time()})
                 atomic_json(history_path,history)
@@ -273,7 +276,7 @@ def abyss_run(request,control):
                     finish_dispatch(dispatch,'sent');atomic_json(history_path,history)
                 if action.kind!='start_battle':session.applied(action)
                 control.log('执行：'+action.name);cooldown=time.monotonic()+2;cooldown_scene=reading.scene;stable=0
-            control.sleep(2.5 if reading.scene==Scene.BATTLE else .4)
+            cycle.wait(control)
         except TaskAttention as exc:
             control.attention(exc);previous=None;stable=0;cooldown=0;dialog_stability.reset()
             if not session.last_action_key.startswith('start:'):session.action_repeats=0
@@ -300,7 +303,7 @@ def mainline_run(request,control):
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
     import runner
     runner.ROOT=root
-    from runner import Runner,classify
+    from runner import Runner,classify,victory_objectives_verified
     class ControlledRunner(Runner):
         def stop(self,status,reason):
             if status=='安全暂停待修复':raise TaskAttention('flow','当前步骤等待处理',reason)
@@ -327,38 +330,47 @@ def mainline_run(request,control):
     r.story=StoryController(r,settings)
     count=lambda:len(r.s['completed'])+r.story.total_wins()
     baseline=count();pacer=TransitionPacer();stability=ScreenStabilityGate();planning=PlanningFrameGate()
+    cycle=ObservationCycle()
     while True:
         try:
+            cycle.begin()
             control.check();frame=capture_fresh(r.capture,control)
             from PIL import Image
             control.preview(Image.fromarray(frame.image[:,:,::-1]))
             if settings['observe']:
                 control.status('只读观察；主线原记录保持不变。',mode='observe',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
                 if request.get('once'):return
-                control.sleep(2);continue
+                cycle.wait(control);continue
             scene=classify(frame)
             if wait_for_input(control,backend):
                 pacer.reset();stability.reset();r.mode_since=time.time();continue
-            if stability.waiting(scene,frame.image,getattr(frame,'words',())):
-                r.mode_since=time.time()
-                control.status('正在等待画面和控件稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=scene)
-                control.sleep(.4);continue
+            if needs_stability_wait(scene,victory_verified=scene=='victory' and victory_objectives_verified(frame)):
+                if stability.waiting(scene,frame.image,getattr(frame,'words',())):
+                    r.mode_since=time.time()
+                    control.status('正在等待画面和控件稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=scene)
+                    cycle.wait(control);continue
+            else:
+                # Known controls and business interrupts outrank background animation,
+                # while business vetoes, freshness and target guards still apply.
+                stability.reset()
             if pacer.waiting(scene):
                 control.status('等待刚才的操作切换界面；不重复点击。',mode='run',scene=scene)
-                control.sleep(.45);continue
+                cycle.wait(control);continue
             if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and not planning.ready(backend):
                 control.status('识别耗时导致画面过期，正在重新取图；尚未规划操作。',mode='recovering',scene=scene)
-                control.sleep(.2);continue
+                cycle.wait(control);continue
             before=getattr(r,'input_sequence',0)
             keep,delay=r.step(frame)
             acted=getattr(r,'input_sequence',0)!=before
             if acted:
                 pacer.applied(scene,entry=bool(r.s.get('active') and scene=='team'));stability.reset()
-            if settings.get('fast_mode',True):delay=next_delay('natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene,delay,acted)
+            delay_scene='natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene
+            delay=next_delay(delay_scene,delay,acted)
             wins=count()-baseline
             control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
             if not keep:return
-            control.sleep(delay)
+            if delay_scene in ('network_error','natural_resource_wait'):control.sleep(delay)
+            else:cycle.wait(control)
         except TaskAttention as exc:
             control.status(scene=r.s.get('screen',scene))
             control.attention(exc)
@@ -369,7 +381,7 @@ def mainline_run(request,control):
             control.status('普通导航尚未发送，画面已过期；正在重新截图并核对当前页。',
                            mode='recovering',scene=r.s.get('screen',scene))
             pacer.reset();stability.reset();r.mode_since=time.time()
-            control.sleep(.4)
+            cycle.wait(control)
         except PcSafetyError as exc:
             control.status(scene=r.s.get('screen',scene))
             control.attention(client_attention(exc))
@@ -385,14 +397,16 @@ def observe_mainline(request,control):
     import numpy as np,cv2
     transport=UnifiedTransport(request['settings'],request['target'],control.check)
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
+    cycle=ObservationCycle()
     while True:
         try:
+            cycle.begin()
             control.check();snap=capture_fresh(transport.capture,control);raw=np.array(snap.image)[:,:,::-1].copy()
             raw=cv2.resize(raw,(1600,900));results,_=ocr(raw)
             control.preview(snap.image)
             control.status('只读观察，不发送输入、不创建或修改通关记录。',mode='observe',scene=classify(Frame(raw,results)))
             if request.get('once'):return
-            control.sleep(2)
+            cycle.wait(control)
         except PauseRun:control.paused()
 
 
@@ -419,7 +433,21 @@ def prepare_selected_profile(request,control):
         raw=cv2.resize(np.array(snap.image)[:,:,::-1].copy(),(1600,900))
         ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2);results,_=ocr(raw)
         scene=classify(Frame(raw,results))
-        if scene not in ('map','lobby'):raise RuntimeError('首次使用请停在大厅或主线地图；没有创建进度或发送点击。')
+        if scene not in ('map','lobby'):
+            verified_dimension=False;verified_theater=False
+            if settings.get('task')=='dimension':
+                from abyss_core import Observation,Token
+                from dimension_core import classify as dimension_classify
+                tokens=[Token(t,min(p[0] for p in b),min(p[1] for p in b),max(p[0] for p in b)-min(p[0] for p in b),max(p[1] for p in b)-min(p[1] for p in b),score=float(s)) for b,t,s in results or []]
+                verified_dimension=dimension_classify(Observation(1600,900,tokens)).scene in ('dimension_hub','dimension_summary','dimension_tutorial_skip','dimension_difficulty','dimension_archive_page')
+            if settings.get('task')=='theater':
+                from theater_worker import read_observation
+                from theater_core import classify as theater_classify
+                from theater_vision import TheaterVision
+                observation=read_observation(snap.image,lambda image:(results,None),snap.captured_at)
+                reading=theater_classify(TheaterVision().apply(snap.image,observation))
+                verified_theater=reading.scene=='theater_list' and reading.episode is not None
+            if not (verified_dimension or verified_theater):raise RuntimeError('首次使用请停在大厅、主线地图、已识别的次元探查页面或可核实剧目/集数的月光剧场列表；没有创建进度或发送点击。')
         transport.ensure();control.check()
         root,_=initialize_selected(True)
         settings.update(data_dir=str(root),portable_first_use=False)
@@ -459,7 +487,13 @@ def run_request(request):
             acknowledge_previous_stop(root,request,control)
             while True:
                 try:
-                    if request['settings']['task']=='abyss':abyss_run(request,control)
+                    if request['settings']['task']=='dimension':
+                        from dimension_worker import run as dimension_run
+                        dimension_run(request,control)
+                    elif request['settings']['task']=='theater':
+                        from theater_worker import run as theater_run
+                        theater_run(request,control)
+                    elif request['settings']['task']=='abyss':abyss_run(request,control)
                     elif request['settings']['observe']:observe_mainline(request,control)
                     else:mainline_run(request,control)
                     break

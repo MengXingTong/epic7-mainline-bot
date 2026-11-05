@@ -10,6 +10,12 @@ def worker_check():
     from rapidocr_onnxruntime import RapidOCR
     from abyss_templates import TemplateBank
     import task_blockers,task_overlays,task_timing,mainline_map,story_core,windows_elevation
+    from theater_vision import TheaterVision
+    import theater_core,theater_journal,theater_worker,theater_directory
+    import theater_ticket_ocr,theater_pending_confirmation
+    import dimension_core,dimension_journal,dimension_worker
+    theater=TheaterVision()
+    assert set(theater.templates)=={'story','battle'},'月光剧场识别资源不完整。'
     from pc_message_backend import CaptureUnavailable
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
     bank=TemplateBank(ROOT/'assets'/'abyss')
@@ -34,7 +40,7 @@ def main():
         assert not ui['observation_switch_present'] and not ui['account_check_required'] and not ui['foreground_selector_present']
         assert not ui['count_limit_present'] and ui['continuous_run']
         assert ui['footer_bottom']<=ui['workarea'][3]
-        assert ui['tasks']==['mainline','abyss','saint_3_7']
+        assert ui['tasks']==['mainline','abyss','saint_3_7','dimension','theater']
         result['gui']=ui
     result['result']='检查通过：仅验证离线运行库、界面和资源；未发送游戏输入，也未创建账号历史。'
     print(json.dumps(result,ensure_ascii=False,indent=2))

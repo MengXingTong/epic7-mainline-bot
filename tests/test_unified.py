@@ -112,6 +112,25 @@ class MessageApiTests(unittest.TestCase):
         api=self.make();api.move(900,650)
         with patch('pc_message_backend.time.sleep'):api.button(True);api.button(False)
         self.assertEqual([a.args[0] for a in api._post.call_args_list],[0x200,0x201,0x202]);self.assertFalse(api.down)
+    def test_default_press_remains_seventy_ms(self):
+        api=self.make();api.move(900,650)
+        with patch('pc_message_backend.time.sleep') as sleep:api.button(True);api.button(False)
+        sleep.assert_called_once_with(.07)
+    def test_short_press_keeps_paired_messages_and_checks_mouse_takeover(self):
+        api=self.make();api.move(900,650)
+        with patch('pc_message_backend.time.sleep') as sleep:
+            api.button(True,press_seconds=.01);api.button(False)
+        sleep.assert_called_once_with(.01)
+        self.assertEqual([a.args[0] for a in api._post.call_args_list],[0x200,0x201,0x202])
+        api._post.reset_mock();api.input_block_reason.return_value='mouse takeover'
+        with self.assertRaises(PcSafetyError):api.button(True,press_seconds=.01)
+        api._post.assert_not_called()
+    def test_invalid_short_press_never_sends_messages(self):
+        for duration in (0,-1,.071,float('nan'),float('inf'),True,'0.01',None):
+            with self.subTest(duration=duration):
+                api=self.make();api.move(900,650)
+                with self.assertRaises(PcSafetyError):api.button(True,press_seconds=duration)
+                api._post.assert_not_called()
     def test_unpaired_down_rejected(self):
         api=self.make();api.pending=(10,10);api.down=True
         with self.assertRaises(PcSafetyError):api.button(True)
@@ -153,6 +172,13 @@ class FrameGuardTests(unittest.TestCase):
     def test_stale_frame_never_clicks(self):
         t,f=self.make();f.captured_at-=10
         with self.assertRaises(RuntimeError):t.tap(f,self.token(800,400))
+        t.api.button.assert_not_called()
+    def test_short_press_still_consumes_frame_and_rejects_stale_target(self):
+        t,f=self.make();t.tap(f,self.token(800,400),press_seconds=.01)
+        self.assertEqual(t.api.button.call_args_list,[unittest.mock.call(True,press_seconds=.01),unittest.mock.call(False)])
+        with self.assertRaises(PcSafetyError):t.tap(f,self.token(800,400),press_seconds=.01)
+        t,f=self.make();f.captured_at-=10
+        with self.assertRaises(PcSafetyError):t.tap(f,self.token(800,400),press_seconds=.01)
         t.api.button.assert_not_called()
     def test_other_frame_never_clicks(self):
         t,f=self.make();t.frame=None

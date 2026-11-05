@@ -6,7 +6,7 @@ from ui_text import ACTION_NAMES,ChineseArgumentParser
 from assistant_config import HOME,read_json,atomic_json
 
 def main():
-    ap=ChineseArgumentParser();ap.add_argument('action',choices=('stop','pause','resume','restart','status'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7'));a=ap.parse_args()
+    ap=ChineseArgumentParser();ap.add_argument('action',choices=('stop','pause','resume','restart','status'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater'));a=ap.parse_args()
     active=read_json(HOME/'active-run.json',{})
     if not active:print('当前没有运行中的统一助手工作进程。');return
     folder=Path(active['run_dir']).resolve()

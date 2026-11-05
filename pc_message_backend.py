@@ -3,7 +3,7 @@ Validated only on the local EpicSeven GLFW30 client in restored-window mode.
 API success is delivery, not game acceptance: planners must verify the next frame.
 """
 from __future__ import annotations
-import time
+import math,time
 import numpy as np
 from pc_backend import Win32Api, PcSafetyError, InputBusy, InputDeliveryError
 from pc_message_probe import MessageProbe, ProbeError
@@ -96,13 +96,16 @@ class MessageWin32Api(Win32Api):
         x,y=self.pending
         return (y<<16)|(x&0xffff)
 
-    def button(self,down):
+    def button(self,down,*,press_seconds=.07):
+        if down and (isinstance(press_seconds,bool) or not isinstance(press_seconds,(int,float))
+                     or not math.isfinite(press_seconds) or not .01<=press_seconds<=.07):
+            raise PcSafetyError('后台点击按下时长必须为10至70毫秒；已拒绝发送。')
         lp=self._lp()
         if down:
             if self.down:raise PcSafetyError('后台鼠标按下与释放不配对，已拒绝操作。')
             self._input_available()
             self._post(0x200,0,lp);self._input_available();self._post(0x201,1,lp);self.down=True
-            time.sleep(.07)
+            time.sleep(press_seconds)
         else:
             if self.down:
                 try:self._post(0x202,0,lp,release=True)

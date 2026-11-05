@@ -8,7 +8,7 @@ import runner
 from assistant_config import atomic_json,validate_run,load_settings
 from assistant_worker import Control,StopRun,acknowledge_previous_stop
 from task_blockers import capacity_blocker,TaskAttention
-from task_timing import TransitionPacer,next_delay
+from task_timing import TransitionPacer,next_delay,ObservationCycle
 from task_overlays import rankup_splash
 from windows_elevation import ensure_administrator,RELAUNCH_FLAG
 from abyss_core import Observation,Token,Scene,Session,classify as abyss_classify
@@ -104,8 +104,24 @@ class AttentionControlTests(unittest.TestCase):
             self.assertEqual(source.size,(1920,1080))
 
 class TimingTests(unittest.TestCase):
-    def test_navigation_quick_battle_lower_frequency_network_unchanged(self):
-        self.assertEqual(next_delay('map',4,True),.45);self.assertEqual(next_delay('battle',5),2.5);self.assertEqual(next_delay('network_error',10,True),10)
+    def test_all_ordinary_scenes_use_quarter_second_business_backoff_unchanged(self):
+        for scene in ('map','team','battle','loading','result_transition','unknown','story','settlement'):
+            for acted in (True,False):
+                self.assertEqual(next_delay(scene,5,acted),.25)
+        self.assertEqual(next_delay('network_error',10,True),10)
+        self.assertEqual(next_delay('natural_resource_wait',60),60)
+    def test_cycle_counts_capture_recognition_and_writes_toward_budget(self):
+        now=[100.0];cycle=ObservationCycle(lambda:now[0]);ctl=Mock()
+        now[0]+=.1;cycle.wait(ctl)
+        self.assertAlmostEqual(ctl.sleep.call_args.args[0],.15)
+    def test_slow_cycle_never_adds_wait_or_catches_up_next_cycle(self):
+        now=[100.0];cycle=ObservationCycle(lambda:now[0]);ctl=Mock()
+        now[0]+=.4;cycle.wait(ctl);ctl.sleep.assert_not_called()
+        cycle.begin();now[0]+=.05;cycle.wait(ctl)
+        self.assertAlmostEqual(ctl.sleep.call_args.args[0],.2)
+    def test_cycle_wait_propagates_stop(self):
+        cycle=ObservationCycle(lambda:100);ctl=Mock();ctl.sleep.side_effect=StopRun()
+        with self.assertRaises(StopRun):cycle.wait(ctl)
     def test_repeated_same_scene_waits_but_new_scene_immediate(self):
         clock=Mock(return_value=100);p=TransitionPacer(clock);p.applied('map')
         clock.return_value=101;self.assertTrue(p.waiting('map'));self.assertFalse(p.waiting('support'))

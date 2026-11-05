@@ -79,8 +79,9 @@ def gate_mainline(state,stop_exists=False):
 
 
 def validate_run(settings,target,allow_reconcile=False):
-    if settings.get('task') not in ('mainline','abyss','saint_3_7'):raise ValueError('未知的任务类型。')
+    if settings.get('task') not in ('mainline','abyss','saint_3_7','dimension','theater'):raise ValueError('未知的任务类型。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('所选客户端目标无效。')
+    if settings.get('task')=='theater' and target['client']!='pc':raise ValueError('月光剧场目前仅接入实验性 PC 后台模式；MuMu尚未验收。')
     if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('桌面端输入模式无效；请使用后台窗口消息。')
     from assistant_portable import enabled,registered_root
     if not settings.get('data_dir') and registered_root() is None:
@@ -110,3 +111,100 @@ def window_layout(workarea,screen_size):
     width=max(1,min(640,aw-40));height=max(1,min(850,ah-70))
     return dict(width=width,height=height,x=left+max(0,aw-width-25),y=top+min(20,max(0,ah-height-30)),
                 min_width=min(560,width),min_height=min(460,height),max_width=max(width,aw-30),max_height=max(height,ah-60))
+
+
+def process_is_alive(pid):
+    """Read-only liveness check; access errors never mean safe to replace."""
+    import ctypes
+    from ctypes import wintypes as w
+    if not isinstance(pid, int) or pid <= 0:
+        raise ValueError('原工作进程编号无效；不重载。')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel.OpenProcess.restype = w.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [w.HANDLE, ctypes.POINTER(w.DWORD)]
+    kernel.GetExitCodeProcess.restype = w.BOOL
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    kernel.CloseHandle.restype = w.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        if ctypes.get_last_error() == 87:
+            return False
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        code = w.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return code.value == 259
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def load_theater_resume_request(run_id, home=HOME):
+    """Explicit maintenance only: reuse an exited run, never create a new one.
+
+    The normal Start/restart paths are unchanged. Caller must launch through
+    the standard entry, after the old GUI exits; the new worker still takes
+    the exclusive profile locks and revalidates the original target/fresh frame.
+    """
+    import re
+    if not isinstance(run_id, str) or not re.fullmatch(r'[0-9a-f]{32}', run_id):
+        raise ValueError('原任务编号无效；不新建任务替代。')
+    home = Path(home).resolve()
+    folder = (home/'runs'/run_id).resolve()
+    if folder.parent != (home/'runs').resolve():
+        raise ValueError('原任务目录不在受管理路径内。')
+    active = read_json(home/'active-run.json', {})
+    request = read_json(folder/'request.json', {})
+    status = read_json(folder/'status.json', {})
+    control = read_json(folder/'control.json', {})
+    if (active.get('run_id') != run_id or Path(active.get('run_dir', '')).resolve() != folder
+            or request.get('run_id') != run_id or Path(request.get('run_dir', '')).resolve() != folder
+            or Path(request.get('home', '')).resolve() != home
+            or status.get('run_id') != run_id or status.get('mode') != 'stopped'
+            or control.get('run_id') != run_id or control.get('action') != 'stop'):
+        raise ValueError('原任务尚未确认停止或身份不一致；不重载、不换run。')
+    if process_is_alive(active.get('worker_pid')):
+        raise ValueError('原工作进程尚未退出；不启动第二个写入者。')
+    settings = request.get('settings', {})
+    if (settings.get('task') != 'theater' or settings.get('observe') is not False
+            or request.get('target', {}).get('client') != 'pc'):
+        raise ValueError('原run维护重载目前仅限实验性PC月光剧场。')
+    root, _ = validate_run(settings, request['target'], allow_reconcile=True)
+    if (root/'STOP').exists():
+        raise ValueError('存在停止标记；原run重载不能归档或绕过STOP。')
+    state = read_json(root/'theater'/'state.json', {})
+    entry = state.get('active')
+    actions = [a for a in state.get('actions', []) if a.get('run_id') == run_id]
+    # A user-started run may stop on identity recognition before its first
+    # dispatch. Maintenance may reload that exact untouched run, but must not
+    # resurrect an archived story or infer that a missing active means no input.
+    def mentions_run(value):
+        if isinstance(value, dict):
+            return any(mentions_run(v) for v in value.values())
+        if isinstance(value, list):
+            return any(mentions_run(v) for v in value)
+        return value == run_id
+    # A sole standalone already-claimed notice dismissal is also zero-entry
+    # maintenance. It never permits recovering archived entries or payment.
+    standalone = (len(actions) == 1 and actions[0].get('kind') == 'close_reward_notice'
+                  and actions[0].get('status') in ('sent', 'not_sent')
+                  and actions[0].get('key') is None and actions[0].get('episode') is None
+                  and isinstance(actions[0].get('evidence'), str) and actions[0]['evidence'])
+    remaining = dict(state)
+    remaining['actions'] = [a for a in state.get('actions', []) if a.get('run_id') != run_id]
+    if (state.get('schema') == 1 and isinstance(state.get('registration_id'), str)
+            and state['registration_id'] and 'active' in state and entry is None
+            and all(isinstance(state.get(k), dict) for k in ('attempted', 'completed', 'entry_dispatches'))
+            and all(isinstance(state.get(k), list) for k in ('actions', 'unresolved_entries'))
+            and (not actions or standalone) and not mentions_run(remaining)):
+        return request
+    from theater_journal import current_pending_ticket
+    if (entry and entry.get('phase') == 'await_ticket' and current_pending_ticket(state, run_id)
+            and actions and all(a.get('status') in ('sent', 'not_sent') for a in actions)):
+        return request
+    if (not entry or entry.get('run_id') != run_id
+            or entry.get('phase') not in ('await_guide', 'story')
+            or not actions or any(a.get('status') not in ('sent', 'not_sent') for a in actions)):
+        raise ValueError('原观览链缺失或存在发送结果未明的意图；不维护重载。')
+    return request
