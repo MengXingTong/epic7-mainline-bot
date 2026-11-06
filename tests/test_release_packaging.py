@@ -74,7 +74,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertEqual(set(archive.namelist()),names|{'UPDATE_README.txt'})
                 self.assertFalse(any(name.startswith(('gui/','runtime/','vendor/','.local/','history/')) for name in archive.namelist()))
                 instructions=archive.read('UPDATE_README.txt').decode('utf-8')
-                self.assertIn('v1.4.10',instructions);self.assertIn('不删除 .local、state.json、evidence',instructions)
+                self.assertIn('v'+build.VERSION.removesuffix('-preview'),instructions);self.assertIn('不删除 .local、state.json、evidence',instructions)
             for name,data in private.items():self.assertEqual((root/name).read_bytes(),data)
 
     def test_readonly_validation_preset_does_not_use_old_display_label(self):

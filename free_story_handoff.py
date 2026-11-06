@@ -37,7 +37,19 @@ def source_handoff(state,historical,current,events,map_data,control):
         or active.get('playback_observed_at') or active.get('story_seen') or active.get('victory_seen')
         or any((row.get('entry') or {}).get('key')==key for row in state.get('unresolved_entries',[]))
         or any(row.get('original_dispatch_id')==rows[0]['id'] for row in state.get('free_story_handoffs',[]))):return None
+    source=reward_interception_proof(original,rows[0],historical,current,events,map_data,control)
+    if source:source['source_state_sha256']=digest(state)
+    return source
+
+
+def reward_interception_proof(original,dispatch,historical,current,events,map_data,control):
+    """Detection-only facts; this function alone never authorizes an entry.
+
+    A no-input observation of a passive known notice is not playback. Any real
+    action beyond the one free reward close, or battle/story/failure, vetoes.
+    """
     from runner import Runner,mainline_map_control
+    key=original['key']
     historical_map=Runner.__new__(Runner).map_ticket(historical)[0]
     historical_control=mainline_map_control(historical)
     if not historical_map or historical_map['key']!=key or not historical_control or historical_control['kind']!='story_only':return None
@@ -51,16 +63,16 @@ def source_handoff(state,historical,current,events,map_data,control):
     index,opened=opens[0];tail=events[index+1:]
     actions=[event for event in tail if event.get('kind')=='action']
     from itertools import groupby
-    screens=[name for name,_ in groupby(event.get('screen') for event in tail if event.get('kind')=='screen')]
+    screens=[name for name,_ in groupby(event.get('screen') for event in tail if event.get('kind')=='screen' and event.get('screen') not in ('tutorial_completed_notice','unknown','unknown_dialog','loading'))]
     if (len(actions)!=1 or actions[0].get('action')!='关闭已发放的免费奖励遮罩' or actions[0].get('stage')!=key
         or screens!=['story_reward','map'] or any(event.get('kind') in ('completed','stop','back','drag') for event in tail)):
         return None
     from datetime import datetime
     open_at=datetime.fromisoformat(opened['time']).timestamp();close_at=datetime.fromisoformat(actions[0]['time']).timestamp()
-    if abs(open_at-rows[0]['reserved_at'])>3 or not 0<=close_at-open_at<=5:return None
+    if abs(open_at-dispatch['reserved_at'])>3 or not 0<=close_at-open_at<=5:return None
     return dict(policy='same_zero_cost_story_flow_after_proven_free_reward_interception',key=key,
-                original_dispatch_id=rows[0]['id'],original_attempt_sha256=attempt_digest(original),
-                source_state_sha256=digest(state),source_events_sha256=digest(events),
+                original_dispatch_id=dispatch['id'],original_attempt_sha256=attempt_digest(original),
+                source_events_sha256=digest(events),
                 historical_image_sha256=hashlib.sha256(historical.image.tobytes()).hexdigest(),
                 chapter_reward=pending['needed'],claimed_check_score=claimed_reward_check(current.image,pending['card_x']),
                 open_event=copy.deepcopy(opened),notice_close_event=copy.deepcopy(actions[0]),at=time.time())

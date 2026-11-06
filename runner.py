@@ -344,17 +344,30 @@ class Runner:
         resumed=[line for line in activity.splitlines() if 'topResumedActivity' in line or 'mResumedActivity' in line]
         if not any(self.cfg['package'] in line for line in resumed):
             raise RuntimeError('模拟器前台应用不是已授权的游戏；未发送输入。')
+    def _can_replan_ui(self,kind):
+        # Exact ordinary control + scene, not an arbitrary Confirm or an entry.
+        ordinary={
+            '未通关验证通过，准备战斗':'map','避开已通关关卡，选择下一关':'map',
+            '完成本章后进入下一章':'map','选择当前队伍':'support',
+            '确认通关结算':'settlement','关闭已发放的免费奖励遮罩':'story_reward',
+            '跳过剧情':'story','确认跳过剧情':'skip_confirm','通关星级页继续至结算':'victory',
+        }
+        return bool(kind in ordinary and ordinary[kind]==self.s.get('screen')
+                    and (not self.s.get('active') or kind in ('跳过剧情','确认跳过剧情','通关星级页继续至结算'))
+                    and getattr(self,'pc',None))
     def action(self,kind,word=None,xy=None):
-        from pc_backend import FrameExpired,NavigationFrameExpired
+        from pc_backend import FrameExpired,NavigationFrameExpired,TapNotSent,NavigationInputDeferred
         try:return self._action(kind,word,xy)
         except FrameExpired as exc:
-            # Only these ordinary map/support taps can be replanned automatically.
-            # Entry intents, drags, holds and uncertain delivery never use this path.
-            ordinary={'未通关验证通过，准备战斗','避开已通关关卡，选择下一关',
-                      '完成本章后进入下一章','选择当前队伍'}
-            if (kind in ordinary and self.s.get('screen') in ('map','support')
-                and not self.s.get('active') and getattr(self,'pc',None)):
-                raise NavigationFrameExpired('普通导航发送前画面过期；重新识别当前页。') from exc
+            if self._can_replan_ui(kind):
+                raise NavigationFrameExpired('普通界面点击尚未发送，画面已过期；重新取图核对当前页。') from exc
+            raise
+        except TapNotSent as exc:
+            if self._can_replan_ui(kind):
+                event('navigation_input_not_sent',action=kind,screen=self.s['screen'],
+                      proof='TapNotSent_before_button_down',reason=str(exc),
+                      input_sequence=getattr(self,'input_sequence',None))
+                raise NavigationInputDeferred(str(exc)) from exc
             raise
     def _revalidate_top_right_skip(self,kind,word):
         """Reobserve the page, then the live label immediately before dispatch.
@@ -436,7 +449,9 @@ class Runner:
         return current,captured_at
     def _action(self,kind,word=None,xy=None):
         self.ensure_game()
-        if time.time()-self.frame.at>5: raise RuntimeError('观察画面已过期；已取消操作。')
+        if time.time()-self.frame.at>5:
+            from pc_backend import FrameExpired
+            raise FrameExpired('观察画面已过期；已取消操作。')
         blocker=capacity_blocker(w['text'] for w in self.frame.words)
         if blocker:raise TaskAttention(blocker.code,blocker.title,blocker.reason)
         if resource_warning(self.frame): raise RuntimeError('输入前触发资源消耗保护，已拒绝操作。')
@@ -570,6 +585,8 @@ class Runner:
         if mode=='chat_panel':return self.attention('chat_panel','聊天面板遮挡了当前流程','请手动关闭聊天面板后点“处理后继续”；不自动输入聊天、点穿结算或重新入场，原进度记录保留。')
         if mode=='chapter_reward_pending':return self.attention('chapter_reward','免费章节奖励尚待核实','已检测到章节奖励通知，但完整当前读数不足；不把下一次新入场点击用于触发领奖。')
         if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
+        if mode in ('battle','victory','settlement') and (self.s.get('active') or {}).get('entry_kind')=='story_only':
+            return self.attention('story_result_external_progress','纯剧情记录与当前战斗不匹配','原入口仅为零体力观看故事；不能用旧剧情active认领后续战斗或结算。保留原记录，从当前画面新开始会完整归档旧链，不补记或重放旧关。')
         if mode=='friendship_upgrade_notice':
             self.action('关闭免费英雄亲密度提升提示',friendship_upgrade_notice_close(f.words));return True,1
         if mode=='date_change_notice':
@@ -660,6 +677,11 @@ class Runner:
                            and sent[0].get('entry',{}).get('key')==a['key'] and sent[0]['entry'].get('entry_kind')=='story_only')
                     if valid:
                         oldrow=clipped_story_completion(f,a,d,rows)
+                        if oldrow is None and a.get('playback_observed_at') and getattr(self,'run_id',None):
+                            from mainline_story_results import recorded_clipped_story_completion
+                            from story_open_ack import binding
+                            trace=[json.loads(line) for line in (ROOT/'events.jsonl').read_text(encoding='utf8').splitlines() if line.strip()]
+                            oldrow=recorded_clipped_story_completion(f,self.s,d,rows,trace,run_id=self.run_id,current_binding=binding(self),root=ROOT)
                         if oldrow:
                             a['map_clear_proof']=oldrow
                             a['map_clear_evidence']=self.evidence('clipped-story-clear-'+a['key'])
@@ -676,7 +698,7 @@ class Runner:
                 if a and time.time()-max(a['start_epoch'],a.get('story_reopen_epoch',0),a.get('free_story_handoff_epoch',0))<20:
                     self.s['reason']='观看故事已发送一次，等待剧情播放或地图通关标记；不重复点击';self.save();return True,.7
                 elif a:
-                    return self.attention('story_result','剧情节点结果尚未确认',getattr(getattr(self,'story_open_ack',None),'last_rejection',None) or '入口消息已发送，但尚无游戏接受或明确通关证据；保留原记录，不据此认定已播放或已完成。')
+                    return self.attention('story_result','剧情节点结果尚未确认',getattr(getattr(self,'story_open_ack',None),'last_rejection',None) or ('已观察到剧情播放，但当前结算/地图通关证据尚未完整核实；保留原播放与入场记录，不重放。' if a.get('playback_observed_at') else '入口消息已发送，但尚无游戏接受或明确通关证据；保留原记录，不据此认定已播放或已完成。'))
             if a:
                 oldrow=next((r for r in rows if r['stage']==a['stage']),None)
                 # New Start already archives old active in start_current_screen.

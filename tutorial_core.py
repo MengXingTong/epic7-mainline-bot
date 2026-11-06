@@ -410,11 +410,12 @@ def chapter_reward_layout(f):
 def chapter_reward_pending(f):
     """Detection-only veto: a reward badge cannot fall through to stage entry."""
     import cv2,numpy as np
-    header=_unique(f,r'第\s*\d+\s*时代\s*Episode',(50,0,430,90),.90)
+    header=_unique(f,r'(?:Episode\s*\d+|第\s*\d+\s*时代\s*Episode)',(50,0,430,90),.90)
     chapter=_unique(f,r'第\s*\d+\s*章.+',(80,95,340,160),.85)
     action=_unique(f,r'观看故事|观看剧情|准备战斗',(1250,780,1550,870),.90)
-    if not all((header,chapter,action)):return None
     layout=chapter_reward_layout(f)
+    complete_layout=bool(layout and len(layout['labels'])==3)
+    if not action or not (complete_layout or (header and chapter)):return None
     tiers=layout['tiers'] if layout else (3,6,9)  # fallback detects only; cannot authorize a claim
     for needed,dot_x,card_x in zip(tiers,(158,282,407),(187,311,436)):
         tile=cv2.cvtColor(f.image[782:804,dot_x-11:dot_x+12],cv2.COLOR_BGR2HSV)
@@ -432,18 +433,21 @@ def chapter_reward_pending(f):
 
 
 def chapter_star_reward_plan(f):
-    """Observed nine-star Era chapter milestone: free reward, never stage entry."""
+    """Layout-based free map milestone; titles are optional context, never entry authority."""
     pending=chapter_reward_pending(f)
     if not pending:return None
     header=pending['header'];chapter=pending['chapter']
     layout=chapter_reward_layout(f)
-    if min(header['score'],chapter['score'])<.98 or not layout:return None
+    if not layout:return None
+    if any(re.fullmatch(r'确认|确定|確認|確定|取消|OK|点击关闭|點擊關閉',w['text'].strip()) for w in f.words):return None
+    context=[w for w in (header,chapter) if w]
+    if len(layout['labels'])!=3 and (len(context)!=2 or min(w['score'] for w in context)<.98):return None
     stars=layout['stars'];needed=pending['needed']
     if not needed<=layout['count']<=layout['total']:return None
     marker=dict(text=str(needed)+'星奖励卡片通知圆点（免费领取，不是入场）',score=1.0,x=pending['dot_x'],y=793)
     target=dict(x=pending['card_x'],y=828,text=str(needed)+'星免费章节奖励卡片',score=1.0)
     return dict(rule='chapter_star_reward',label='领取已达成的免费章节星星奖励（不入场）',target=target,
-                proof=[header,chapter,stars,marker,*layout['labels']])
+                proof=[stars,marker,*layout['labels'],*context])
 
 
 def restore_offensive_basic_plan(f):

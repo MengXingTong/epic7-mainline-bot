@@ -60,7 +60,7 @@ class PhysicalInputTests(unittest.TestCase):
 
     def test_actual_held_button_inside_game_still_waits_and_resumes_after_release(self):
         api=self.make();self.pointer[:]=[-1700,200];self.pressed={1}
-        self.assertIn('松开后自动继续',api.input_block_reason(api.target))
+        self.assertIn('全局按住状态',api.input_block_reason(api.target))
         with self.assertRaises(InputBusy):api.button(True)
         api._post.assert_not_called();self.pressed.clear()
         self.assertEqual(api.input_block_reason(api.target),'')
@@ -77,7 +77,7 @@ class PhysicalInputTests(unittest.TestCase):
     def test_held_mouse_or_modifier_outside_game_yields_until_release(self):
         api = self.make()
         for key in (1, 2, 4, 0x10, 0x11, 0x12):
-            self.pressed = {key}; self.assertIn('松开后自动继续', api.input_block_reason(api.target))
+            self.pressed = {key}; self.assertIn('全局按住状态', api.input_block_reason(api.target))
         self.pressed.clear(); self.assertEqual(api.input_block_reason(api.target), '')
 
     def test_async_key_low_bit_is_not_treated_as_a_held_button(self):

@@ -20,13 +20,20 @@ class NavigationFrameExpired(FrameExpired):
     """A whitelisted non-entry tap expired before any button-down was sent."""
 
 class InputBusy(PcSafetyError):
-    """Physical input owns the client; no new synthetic press was sent."""
+    """Physical input blocks further sends; a drag/hold may already be down."""
 
 class InputDeliveryError(PcSafetyError):
     """Delivery failed or is uncertain. Preserve intent; never replay an entry."""
 
 class TapNotSent(InputBusy):
     """A tap was cancelled before its button-down; no entry input was sent."""
+
+class NavigationInputDeferred(TapNotSent):
+    """A whitelisted non-entry UI tap was cancelled before button-down.
+
+    Only a fresh plan may replace it. No entry, journaled close, drag, hold,
+    uncertain send or previous observation is authorized by this signal.
+    """
 
 @dataclass(frozen=True)
 class WindowSnapshot:

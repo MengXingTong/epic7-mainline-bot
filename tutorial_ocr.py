@@ -76,7 +76,8 @@ def strengthen_enemy_levels(f,ocr):
 
 def strengthen_chapter_reward_thresholds(f,ocr):
     """Current fixed star-threshold fields, detector dual-read at original score."""
-    if not any(re.fullmatch(r'第\s*\d+\s*时代\s*Episode',w['text']) and w['score']>=.98 for w in f.words):return
+    # Counter, exact map action and fixed label geometry are the anchors. A map
+    # title is not a prerequisite; no account/identity field is read or modified.
     totals=[w for w in f.words if re.fullmatch(r'\d{1,3}/\d{1,3}',w['text']) and w['score']>=.98 and 20<w['x']<110 and 750<w['y']<795]
     if len(totals)!=1 or not any(w['text'] in ('观看故事','观看剧情','准备战斗') and w['score']>=.98 and w['x']>1250 and w['y']>780 for w in f.words):return
     for rect in ((185,752,225,794),(305,755,342,790),(425,752,470,794)):
@@ -338,12 +339,49 @@ def strengthen_map_stage_number(f,ocr):
     if not 15<=height<=60:return
     x1=max(0,int(left)-2);x2=min(1600,int(left)+round(height*.61*len(match[1])+2))
     y1=max(0,int(top)-2);y2=min(900,int(bottom)+3)
-    crop=f.image[y1:y2,x1:x2];scores=[]
+    crop=f.image[y1:y2,x1:x2];scores=[];dotted=False
     for scale in (2,3):
         rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0];read=re.fullmatch(r'([1-9]\d?)[.．]?',text.strip())
-        if not read or read[1]!=match[1] or score<.98:return
+        if not read or read[1]!=match[1] or not 0<=score<=1:return
+        dotted=dotted or text.strip().endswith(('.', '．'))
         scores.append(float(score))
+    crop_kind='original_numeric_prefix'
+    if min(scores)<.98:
+        # A trailing row separator can weaken the whole recognition, even when
+        # both reads agree on the original number. Isolate only tall current
+        # digit glyphs, never guess a digit or promote the stage-name score.
+        if not dotted:return
+        rect=_tight_map_number_crop(f,(x1,y1,x2,y2),len(match[1]))
+        if rect is None:return
+        x1,y1,x2,y2=rect;crop=f.image[y1:y2,x1:x2];scores=[]
+        for scale in (2,3):
+            rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
+            if not rows or len(rows)!=1 or len(rows[0])!=2:return
+            text,score=rows[0]
+            if text.strip()!=match[1] or not .98<=score<=1:return
+            scores.append(float(score))
+        crop_kind='current_numeric_glyphs'
     word['stage_number_verification']=dict(source='current_map_numeric_prefix_dual_read',number=int(match[1]),scores=scores,
-        captured_at=f.at,crop=[x1,y1,x2,y2],crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest())
+        captured_at=f.at,crop=[x1,y1,x2,y2],crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest(),crop_kind=crop_kind)
+
+
+def _tight_map_number_crop(f,rect,digit_count):
+    """Bound current bright numeral glyphs inside the original prefix only."""
+    import numpy as np
+    x1,y1,x2,y2=rect;height=y2-y1
+    tile=cv2.cvtColor(f.image[y1:y2,x1:x2],cv2.COLOR_BGR2HSV)
+    mask=np.uint8((tile[:,:,1]<130)&(tile[:,:,2]>170))*255
+    _,_,stats,_=cv2.connectedComponentsWithStats(mask)
+    glyphs=[(int(x),int(y),int(w),int(h)) for x,y,w,h,area in stats[1:]
+            if max(10,round(height*.4))<=h<=height-2 and 1<=w<=h and area>=max(12,h)]
+    if len(glyphs)!=digit_count:return None
+    glyphs.sort()
+    if max(y for x,y,w,h in glyphs)-min(y for x,y,w,h in glyphs)>3:return None
+    if max(h for x,y,w,h in glyphs)-min(h for x,y,w,h in glyphs)>3:return None
+    if any(not 0<=b[0]-(a[0]+a[2])<=height*.45 for a,b in zip(glyphs,glyphs[1:])):return None
+    return (max(x1,x1+min(x for x,y,w,h in glyphs)-2),
+            max(y1,y1+min(y for x,y,w,h in glyphs)-2),
+            min(x2,x1+max(x+w for x,y,w,h in glyphs)+2),
+            min(y2,y1+max(y+h for x,y,w,h in glyphs)+2))

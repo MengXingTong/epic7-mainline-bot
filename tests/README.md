@@ -86,3 +86,17 @@ Actual client screenshots/OCR/navigation evidence stay under ignored `.local`, n
 `test_map_number_verification.py` 独立验证本帧地图编号，不提高低置信名称分数：两个≥0.98编号读数必须与当前原前缀一致，唯一蓝色当前行与本帧裁剪哈希/采集时间绑定，画面/数字变化、未知弹窗或读数不一致均拒绝。当前私有实图编号双读>0.999，仍不把罗马数字后缀伪造为高置信名称。
 
 - `test_story_open_ack.py` now also exercises the production notice→dismissal→same-entry response chain, the one-frame disappearance race, legacy receipt/pixel replay, OCR gaps, repeated occurrences, mutated/foreign/incomplete receipts, paid/archived/accepted entries and critical evidence/journal failures. All input remains mocked; a passed chain test is not a live game acceptance.
+
+- `test_navigation_input_defer.py`: no-input-before-down typed recovery for exact ordinary UI scenes, fresh worker recapture, active story/result controls, and exclusions for entry/durable intents/ambiguous sends/window/critical writes. Physical input is mocked. `test_free_story_handoff.py` additionally covers regular Episode and arbitrary current star tiers plus no-input passive observations; archives and extra actions remain vetoes.
+
+## 入场响应等待与瞬时全局按住
+
+`test_entry_response_timing.py` 覆盖原入场15秒零输入观察被全局按住等待打断后的剩余截止时刻、不延时/不补发、普通UI重新规划及业务拦截优先。两项测试运行真实 `mainline_run` 循环并模拟按住/松开/独立截图，核对只发生一次原入场、attempted/sent/active/旧失败保留且不写completed。全部输入、窗口、时钟及状态根使用模拟或临时目录，不操作实际游戏；不能据此声称耗体力战斗补发已获授权或实机验证通过。
+
+## 地图数字前缀与分隔点
+
+`test_map_number_verification.py` 的分隔点补强分支只在原数字一致时使用当前前缀内的数字组件裁剪，覆盖1/2位任意测试数字、四读/双读阈值、不同数字/标点/非数字拒绝、缺失/多余/断裂组件、原名称置信度不变、截图时间/像素/编号绑定和未知弹层优先。可用 `EPIC7_MAP_PREFIX_FIXTURE` 指向含 `source.png` 与 `source-ocr.json` 的私有回放目录；缺失则明确跳过生产OCR回放，私有账号图不随源码提交。所有测试均离线，不发送游戏输入或改写入场记录。
+
+## 章末裁切故事结果的严格两行分支
+
+`test_recorded_clipped_story_results.py` 覆盖当前原故事的同run/同窗口绑定、唯一sent与来源哈希、完整实际播放/免费奖励链及原证据路径、两行连续编号/间距/后继锁、独立通关勾和未知弹层优先。真实Runner专项核对只完成原故事、不重开入口，attempted/sent不变；另验证纯剧情active不能认领后续战斗/胜利/战斗结算。私有原画面仅在隔离状态副本做生产OCR回放，缺失则跳过；不恢复或修改实际旧进度，不提交账号素材，不向游戏发送测试输入。

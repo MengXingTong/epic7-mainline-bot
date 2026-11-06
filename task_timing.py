@@ -63,14 +63,19 @@ class ScreenStabilityGate:
 
 class TransitionPacer:
     def __init__(self,clock=time.monotonic):
-        self.clock=clock;self.scene=None;self.until=0
+        self.clock=clock;self.reset()
     def applied(self,scene,entry=False):
-        self.scene=scene;self.until=self.clock()+(15 if entry else 3)
+        self.scene=scene;self.entry=bool(entry);self.until=self.clock()+(15 if entry else 3)
+    def input_wait_finished(self):
+        # A physical key wait invalidates plans/coordinates, not a sent entry's
+        # response deadline. Preserve only this input-free cooldown; do not
+        # restart/extend it or authorize another entry.
+        if not self.entry:self.reset()
     def waiting(self,scene):
         if scene in INTERRUPTS or scene!=self.scene or self.clock()>=self.until:
-            self.scene=None;return False
+            self.reset();return False
         return True
-    def reset(self):self.scene=None;self.until=0
+    def reset(self):self.scene=None;self.until=0;self.entry=False
 
 def next_delay(scene,original,acted=False):
     # Business backoff is deliberately NOT accelerated. Ordinary delays are

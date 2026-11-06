@@ -8,7 +8,7 @@ from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
 from task_blockers import TaskAttention
 from task_timing import TransitionPacer,next_delay,ScreenStabilityGate,needs_stability_wait,ObservationCycle
-from pc_backend import PcSafetyError,InputBusy,FrameExpired,NavigationFrameExpired
+from pc_backend import PcSafetyError,InputBusy,FrameExpired,NavigationFrameExpired,NavigationInputDeferred
 
 class StopRun(Exception):pass
 class PauseRun(Exception):pass
@@ -98,7 +98,7 @@ class GuardedApi:
 
 def client_attention(exc):
     if isinstance(exc,InputBusy):
-        return TaskAttention('client_input','输入被接管，已暂停','检测到鼠标或按键接管，当前操作已暂停。请松开实际按住的鼠标/按键后点继续，重新读取画面；已记录的入场意图保留，不会再次开战。')
+        return TaskAttention('client_input','输入冲突，操作已暂停',str(exc)+'；该状态可能来自其他窗口，不等于鼠标移动或游戏被接管。当前操作不能证明可自动重规划，请松开实际按住的鼠标/按键后点继续，重新读取画面；原入场/拖动/按住记录保留，不会再次开战。')
     return TaskAttention('client_input','客户端操作已暂停',str(exc)+'；确认客户端后点继续，重新截图；若窗口/进程已更换，请停止并重选实例。')
 
 
@@ -389,7 +389,7 @@ def mainline_run(request,control):
             r.story_open_ack.observe_scene(scene,frame)
             r.free_notices.observe_scene(scene,frame)
             if wait_for_input(control,backend):
-                pacer.reset();stability.reset();r.mode_since=time.time();continue
+                pacer.input_wait_finished();stability.reset();r.mode_since=time.time();continue
             if needs_stability_wait(scene,victory_verified=scene=='victory' and victory_objectives_verified(frame)):
                 if stability.waiting(scene,frame.image,getattr(frame,'words',())):
                     r.mode_since=time.time()
@@ -423,6 +423,11 @@ def mainline_run(request,control):
             if exc.code not in ('flow','client_input','entry_not_sent'):r.ticket=None
             if exc.code=='flow':r.mode_since=time.time()
             pacer.reset();stability.reset();planning.reset();r.s.pop('attention',None);r.save()
+        except NavigationInputDeferred as exc:
+            control.status('普通界面点击已在按下前取消；'+str(exc)+' 等待空闲并重新取图核验，不需要手动继续。',
+                           mode='waiting_input',scene=r.s.get('screen',scene),attention_code='')
+            pacer.reset();stability.reset();planning.reset();r.mode_since=time.time()
+            cycle.wait(control)
         except NavigationFrameExpired:
             control.status('普通导航尚未发送，画面已过期；正在重新截图并核对当前页。',
                            mode='recovering',scene=r.s.get('screen',scene))

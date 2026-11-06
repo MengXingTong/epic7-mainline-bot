@@ -52,9 +52,12 @@ class MessageWin32Api(Win32Api):
         with self.dpi():
             point=self.w.POINT()
             if not self.u.GetCursorPos(self.c.byref(point)):
-                return '当前桌面鼠标状态暂不可读，等待桌面可用后自动继续。'
-            if any(self.u.GetAsyncKeyState(key)&0x8000 for key in (1,2,4,5,6,0x10,0x11,0x12)):
-                return '检测到鼠标按键或修饰键按住，松开后自动继续。'
+                return '当前桌面鼠标状态暂不可读。'
+            keys=((1,'鼠标左键'),(2,'鼠标右键'),(4,'鼠标中键'),(5,'鼠标侧键1'),(6,'鼠标侧键2'),
+                  (0x10,'Shift'),(0x11,'Ctrl'),(0x12,'Alt'))
+            held=[label for key,label in keys if self.u.GetAsyncKeyState(key)&0x8000]
+            if held:
+                return '检测到全局按住状态：'+'、'.join(held)+'（可能来自其他窗口，不代表游戏被接管）。'
         return ''
 
     def _input_available(self):
