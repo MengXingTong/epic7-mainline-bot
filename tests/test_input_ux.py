@@ -40,11 +40,30 @@ class PhysicalInputTests(unittest.TestCase):
         api.u.GetAncestor.return_value = api.target.hwnd
         return api
 
-    def test_hover_in_actual_game_client_yields_without_moving_mouse(self):
+    def test_hover_in_actual_game_client_does_not_pause_or_move_pointer(self):
         api = self.make(); self.pointer[:] = [-1700, 200]
-        self.assertIn('移出后自动继续', api.input_block_reason(api.target))
+        self.assertEqual(api.input_block_reason(api.target),'')
+        with patch('pc_message_backend.time.sleep'):api.button(True);api.button(False)
+        self.assertEqual([c.args[0] for c in api._post.call_args_list],[0x200,0x201,0x202])
+        api.u.SetCursorPos.assert_not_called();api.u.SendInput.assert_not_called();api.u.WindowFromPoint.assert_not_called()
+
+    def test_hover_and_pointer_motion_between_move_and_down_do_not_block(self):
+        api=self.make();self.pointer[:]=[-1700,200]
+        original=api.u.GetCursorPos.side_effect
+        def moving(point):
+            self.pointer[0]+=1
+            return original(point)
+        api.u.GetCursorPos.side_effect=moving
+        with patch('pc_message_backend.time.sleep'):api.button(True);api.button(False)
+        self.assertEqual([c.args[0] for c in api._post.call_args_list],[0x200,0x201,0x202])
+        api.u.SetCursorPos.assert_not_called();api.u.WindowFromPoint.assert_not_called()
+
+    def test_actual_held_button_inside_game_still_waits_and_resumes_after_release(self):
+        api=self.make();self.pointer[:]=[-1700,200];self.pressed={1}
+        self.assertIn('松开后自动继续',api.input_block_reason(api.target))
         with self.assertRaises(InputBusy):api.button(True)
-        api._post.assert_not_called(); api.u.SetCursorPos.assert_not_called(); api.u.SendInput.assert_not_called()
+        api._post.assert_not_called();self.pressed.clear()
+        self.assertEqual(api.input_block_reason(api.target),'')
 
     def test_occluding_other_app_is_not_mistaken_for_game_mouse_ownership(self):
         api = self.make(); self.pointer[:] = [-1700, 200]; api.u.GetAncestor.return_value = 999
@@ -69,8 +88,8 @@ class PhysicalInputTests(unittest.TestCase):
         api = self.make(); api.u.GetCursorPos.side_effect = None; api.u.GetCursorPos.return_value = False
         self.assertIn('暂不可读', api.input_block_reason(api.target)); api._post.assert_not_called()
 
-    def test_mouse_arriving_between_move_and_down_never_receives_down(self):
-        api = self.make(); api.input_block_reason = Mock(side_effect=['', '鼠标进入游戏'])
+    def test_mouse_press_between_move_and_down_never_receives_down(self):
+        api = self.make(); api.input_block_reason = Mock(side_effect=['', '用户按住鼠标'])
         with self.assertRaises(InputBusy):api.button(True)
         self.assertEqual([c.args[0] for c in api._post.call_args_list], [0x200])
         self.assertFalse(api.down)
@@ -83,7 +102,7 @@ class PhysicalInputTests(unittest.TestCase):
         api.u.GetCursorPos.assert_not_called()
 
     def test_drag_takeover_stops_motion_but_releases_original_pair(self):
-        api = self.make(); api.down = True; self.pointer[:] = [-1700, 200]
+        api = self.make(); api.down = True; self.pointer[:] = [-1700, 200];self.pressed={1}
         try:
             with self.assertRaises(InputBusy):api.move(-1600, 300)
         finally:api.button(False)
@@ -91,7 +110,7 @@ class PhysicalInputTests(unittest.TestCase):
         self.assertEqual(api.pending, (100, 100))
 
     def test_escape_is_not_sent_while_user_owns_game(self):
-        api = self.make(); self.pointer[:] = [-1700, 200]
+        api = self.make(); self.pointer[:] = [-1700, 200];self.pressed={1}
         with self.assertRaises(InputBusy):api.escape()
         api._post.assert_not_called()
 

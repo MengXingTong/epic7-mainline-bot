@@ -37,6 +37,46 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn('实验性',readme)
         self.assertIn('不要删除.local、state.json、evidence或原进度',readme)
 
+    def test_all_packaged_local_imports_are_allowlisted_once(self):
+        import ast
+        root=Path(build.__file__).resolve().parent
+        self.assertEqual(len(build.SOURCES),len(set(build.SOURCES)))
+        local={p.stem for p in root.glob('*.py')}
+        included={Path(name).stem for name in build.SOURCES if name.endswith('.py')}
+        for name in build.SOURCES:
+            self.assertEqual(Path(name).name,name)
+            self.assertTrue((root/name).is_file(),name)
+            if not name.endswith('.py'):continue
+            for node in ast.walk(ast.parse((root/name).read_text(encoding='utf-8-sig'))):
+                modules=([a.name.split('.')[0] for a in node.names] if isinstance(node,ast.Import)
+                         else [node.module.split('.')[0]] if isinstance(node,ast.ImportFrom) and node.module else [])
+                for module in modules:
+                    if module in local:self.assertIn(module,included,(name,node.lineno,module))
+        for name in ('free_notices','story_open_ack','mainline_maintenance','tutorial_core','penguin_worker'):
+            self.assertIn(name,included)
+
+    def test_update_contains_current_validation_and_no_runtime_or_private_state(self):
+        import json,zipfile
+        with tempfile.TemporaryDirectory(prefix='epic7-clean-update-') as folder:
+            root=Path(folder)/'package';root.mkdir()
+            names=set(build.SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md',
+                'STALL_VALIDATION.md','DIMENSION_VALIDATION.md','THEATER_VALIDATION.md','MAINLINE_VALIDATION.md',
+                'THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
+            for name in names:(root/name).write_text('synthetic package source',encoding='utf-8')
+            (root/'portable.json').write_text(json.dumps({'version':build.VERSION}),encoding='utf-8')
+            private={'.local/settings.json':b'preserve settings','history/state.json':b'preserve history',
+                     'history/evidence/old.png':b'preserve evidence','history/STOP':b'preserve stop'}
+            for name,data in private.items():
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+            with zipfile.ZipFile(build.build_update(root)) as archive:
+                self.assertIn('MAINLINE_VALIDATION.md',archive.namelist())
+                self.assertIsNone(archive.testzip())
+                self.assertEqual(set(archive.namelist()),names|{'UPDATE_README.txt'})
+                self.assertFalse(any(name.startswith(('gui/','runtime/','vendor/','.local/','history/')) for name in archive.namelist()))
+                instructions=archive.read('UPDATE_README.txt').decode('utf-8')
+                self.assertIn('v1.4.10',instructions);self.assertIn('不删除 .local、state.json、evidence',instructions)
+            for name,data in private.items():self.assertEqual((root/name).read_bytes(),data)
+
     def test_readonly_validation_preset_does_not_use_old_display_label(self):
         root=Path(build.__file__).resolve().parent
         source=(root/'assistant_app.py').read_text(encoding='utf-8')

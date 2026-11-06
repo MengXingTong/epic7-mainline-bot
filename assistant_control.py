@@ -18,6 +18,8 @@ def main():
         print(json.dumps(status,ensure_ascii=False,indent=2));return
     if a.action=='restart':
         request=read_json(folder/'request.json',{})
+        if (a.task or request.get('settings',{}).get('task'))=='penguin':
+            raise ValueError('买企鹅不能通过维护重启重复旧订单；请在界面确认本次数量后明确开始。')
         atomic_json(HOME/'gui-command.json',{'command_id':uuid.uuid4().hex,'action':'restart','expected_run_id':active['run_id'],'task':a.task or request.get('settings',{}).get('task','mainline')})
         print('已通过现有界面请求安全重启工作进程；未重置历史或重启游戏。');return
     if a.action=='resume' and status.get('mode') not in ('paused','attention'):raise ValueError('只有已暂停或等待处理的工作进程才能继续；未执行重启。')

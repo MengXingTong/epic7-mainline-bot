@@ -79,8 +79,13 @@ def gate_mainline(state,stop_exists=False):
 
 
 def validate_run(settings,target,allow_reconcile=False):
-    if settings.get('task') not in ('mainline','abyss','saint_3_7','dimension','theater'):raise ValueError('未知的任务类型。')
+    if settings.get('task') not in ('mainline','abyss','saint_3_7','dimension','theater','penguin'):raise ValueError('未知的任务类型。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('所选客户端目标无效。')
+    if settings.get('task')=='penguin':
+        from penguin_core import quantity
+        quantity(settings.get('penguin_quantity',''))
+        if target['client']!='pc':raise ValueError('买企鹅目前仅接入实验性 PC 后台模式；MuMu未验收。')
+        if settings.get('observe'):raise ValueError('买企鹅必须通过明确数量任务启动；不能从只读模式发送购买。')
     if settings.get('task')=='theater' and target['client']!='pc':raise ValueError('月光剧场目前仅接入实验性 PC 后台模式；MuMu尚未验收。')
     if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('桌面端输入模式无效；请使用后台窗口消息。')
     from assistant_portable import enabled,registered_root
@@ -161,12 +166,21 @@ def load_theater_resume_request(run_id, home=HOME):
     if (active.get('run_id') != run_id or Path(active.get('run_dir', '')).resolve() != folder
             or request.get('run_id') != run_id or Path(request.get('run_dir', '')).resolve() != folder
             or Path(request.get('home', '')).resolve() != home
-            or status.get('run_id') != run_id or status.get('mode') != 'stopped'
+            or status.get('run_id') != run_id or not (status.get('mode')=='stopped' or
+                (status.get('mode')=='blocked' and request.get('settings',{}).get('task')=='mainline'))
             or control.get('run_id') != run_id or control.get('action') != 'stop'):
         raise ValueError('原任务尚未确认停止或身份不一致；不重载、不换run。')
     if process_is_alive(active.get('worker_pid')):
         raise ValueError('原工作进程尚未退出；不启动第二个写入者。')
     settings = request.get('settings', {})
+    if settings.get('task')=='mainline':
+        maintenance=read_json(folder/'mainline-maintenance-request.json',{})
+        if maintenance.get('run_id')!=run_id or Path(maintenance.get('run_dir','')).resolve()!=folder:
+            raise ValueError('缺少原主线run的明确维护请求；不按新开始替代。')
+        root,_=validate_run(settings,request['target'],allow_reconcile=True)
+        from mainline_maintenance import validate_maintenance
+        validate_maintenance(maintenance,root,read_json(root/'state.json',{}),before_activation=True)
+        return maintenance
     if (settings.get('task') != 'theater' or settings.get('observe') is not False
             or request.get('target', {}).get('client') != 'pc'):
         raise ValueError('原run维护重载目前仅限实验性PC月光剧场。')

@@ -38,6 +38,50 @@ def step(r):
 
 
 class TeamPreparationTests(unittest.TestCase):
+    def episode_party(self):
+        return frame([('准备战斗',148,42),('Episode1队',87,121),('Episode2队',87,197),('Episode3队',87,271),
+                      ('闯关成功',1262,233),('完成故事',1261,268),('1名以上英雄存活',1305,303),
+                      ('登场的敌人',1267,361),('辅助英雄无法参与',1000,605),('·队伍战斗力',399,797),
+                      ('管理队伍',92,851),('进行任务',1434,821),('新关卡',1220,168),('8/542',1267,831)])
+
+    def test_native_episode_party_without_eligible_support_is_single_entry_only(self):
+        f=self.episode_party();control=team_entry_control(f);self.assertEqual(control['kind'],'single_task')
+        self.assertEqual(control['target']['text'],'进行任务');self.assertIn('不推断',control['proof'])
+        r=prepared_runner(f);old=copy.deepcopy(r.s['attempted']);step(r)
+        self.assertEqual(r.action.call_count,1);self.assertEqual(r.s['active']['cost'],8)
+        self.assertEqual(r.s['entry_dispatches']['E1-C1-S2'][0]['status'],'sent')
+        self.assertEqual(r.s['completed'],{});self.assertEqual(r.s['attempted']['old-failure'],old['old-failure'])
+
+    def test_native_episode_party_missing_weak_duplicate_or_shifted_anchor_is_unknown(self):
+        for i in range(12):
+            for mode in ('missing','weak','duplicate','shifted'):
+                f=self.episode_party()
+                if mode=='missing':f.words.pop(i)
+                elif mode=='weak':f.words[i]['score']=.899 if i==9 else .979
+                elif mode=='duplicate':f.words.append(copy.deepcopy(f.words[i]))
+                else:f.words[i]['x']=1600
+                self.assertEqual(team_entry_control(f)['kind'],'unknown',(i,mode))
+
+    def test_native_episode_party_selector_and_hosted_or_dialog_never_enter(self):
+        for text in ('托管战斗','重复战斗','确认','取消','搜索'):
+            f=self.episode_party();f.words+=frame([(text,1500 if text=='搜索' else 800,115 if text=='搜索' else 500)]).words
+            if text=='搜索':f.words+=frame([('等级',1318,113),('维多丽卡',1347,324)]).words
+            self.assertEqual(team_entry_control(f)['kind'],'unknown',text)
+
+    def test_story_fixed_team_without_auto_is_only_normal_single_entry(self):
+        words=[('准备战斗',148,42),('故事队伍',84,120),('故事队伍',291,112),('故事',699,217),
+               ('闯关成功',1259,233),('完成故事',1258,268),('1名以上英雄存活',1300,301),
+               ('登场的敌人',1264,360),('队伍战斗力',391,797),('管理队伍',89,851),('进行任务',1432,818)]
+        f=frame([*words,('新关卡',1239,161),('8/82',1264,824)])
+        self.assertEqual(team_entry_control(f)['kind'],'single_task')
+        r=prepared_runner(f);step(r);self.assertEqual(r.s['active']['cost'],8)
+        for index in range(len(words)):
+            altered=frame([*words,('新关卡',1239,161),('8/82',1264,824)])
+            altered.words[index]['score']=.89 if index==8 else .90
+            self.assertEqual(team_entry_control(altered)['kind'],'unknown')
+        f=frame([*words,('新关卡',1239,161),('8/82',1264,824),('托管战斗',1400,120)])
+        self.assertEqual(team_entry_control(f)['kind'],'unknown')
+
     def test_empty_support_layout_uses_only_observed_single_task_button(self):
         f=preparation();control=team_entry_control(f)
         self.assertEqual(control['kind'],'single_task')
@@ -127,7 +171,12 @@ class TeamPreparationTests(unittest.TestCase):
         r=prepared_runner(preparation());r.action.side_effect=InputDeliveryError('delivery unknown')
         with self.assertRaises(InputDeliveryError):step(r)
         self.assertFalse(can_enter(r.s,'E1-C1-S2'))
-        r.action.reset_mock();r.action.side_effect=None;step(r);r.action.assert_not_called()
+        original=copy.deepcopy(r.s['active'])
+        r.action.reset_mock();r.action.side_effect=None
+        with self.assertRaises(TaskAttention):step(r)
+        r.action.assert_not_called();r.back.assert_not_called()
+        self.assertEqual(r.s['active'],original)
+        self.assertNotIn('unresolved_entries',r.s)
 
     def test_resource_capacity_and_confirmation_overlays_keep_priority(self):
         for text,scene in [('是否使用生命之叶补充体力','resource_stop'),

@@ -88,3 +88,75 @@ def friendship_upgrade_notice_close(words,width=1600,height=900):
         # cancel, paid/resource or defeat combination remains a veto.
         if battle_settlement_confirm(words,width,height) is None:return None
     return close[0] if heading and len(close)==1 else None
+
+
+def chat_panel_heading(words,width=1600,height=900):
+    """A partial chat header may veto the background, never authorize a tap."""
+    return any(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])) in
+               ('骑士团频道','世界频道','聊天频道','频道') and w.get('score',1.0)>=.85
+               and .55<w['x']/width<.85 and 0<w['y']/height<.10 for w in words)
+
+
+def chat_panel_visible(words,width=1600,height=900):
+    """Identify the chat overlay, not chat words in a story or the lobby."""
+    rows=[(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])),
+           w['x']/width,w['y']/height,w.get('score',1.0)) for w in words]
+    rows=[row for row in rows if row[3]>=.85]
+    heading=chat_panel_heading(words,width,height)
+    entry=any(t=='点击此处并输入' and .55<x<.89 and .86<y<.99 for t,x,y,score in rows)
+    send=any(t=='输入' and .86<x<.99 and .86<y<.99 for t,x,y,score in rows)
+    connecting=any(t=='与聊天服务器连接中' and .55<x<.95 and .40<y<.65 for t,x,y,score in rows)
+    return heading and ((entry and send) or connecting)
+
+
+def top_right_skip_control(words,*,tutorial=False):
+    """Only a unique current exact label authorizes the shared chat/skip area."""
+    # Even incomplete results cannot reuse a residual Skip token.
+    result_labels={'clear','victory','关卡任务','闯关成功','战斗结果','获得的道具'}
+    if any(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).casefold() in result_labels for w in words):return None
+    if chat_panel_heading(words):return None
+    label='跳过教学' if tutorial else '跳过'
+    candidates=[w for w in words if re.sub(r'\s+','',unicodedata.normalize('NFKC',w['text']))==label]
+    if len(candidates)!=1:return None
+    w=candidates[0]
+    if w.get('score',0)<.90 or not ((1330 if tutorial else 1400)<=w['x']<=1599 and 0<=w['y']<=100):return None
+    return w
+
+
+# Explicit passive notices only. New error namespaces are NOT wildcard-approved.
+_PASSIVE_FREE_NOTICE_BODIES={
+    'tutorial_complete.already_completed_tutorial':'tutorial_completed_notice',
+    '该教学已完成。':'tutorial_completed_notice',
+    '该教程已完成。':'tutorial_completed_notice',
+    '此教学已完成。':'tutorial_completed_notice',
+    '此教程已完成。':'tutorial_completed_notice',
+}
+
+
+def passive_free_notice(words,width=1600,height=900):
+    """Known harmless body + one current Close, not every closeable dialog.
+
+    Background narrative containing e.g. 确认自己 is not a Confirm button.
+    Real confirmation controls and in-panel unknown/cost text still veto. The
+    classifier's independent capacity/resource/defeat guards remain higher.
+    """
+    def text(word):return re.sub(r'\s+','',unicodedata.normalize('NFKC',word['text']))
+    rows=[(text(w),w['x']/width,w['y']/height,w) for w in words]
+    if any(re.fullmatch(r'确认|确定|取消|確認|確定|OK|YES|NO',t,re.I) for t,x,y,w in rows):return None
+    headings=[(t,w) for t,x,y,w in rows if t in _PASSIVE_FREE_NOTICE_BODIES]
+    closes=[w for t,x,y,w in rows if t in ('点击关闭','點擊關閉')]
+    if len(headings)!=1 or len(closes)!=1:return None
+    body,title=headings[0];close=closes[0]
+    if (title.get('score',0)<.98 or close.get('score',0)<.98
+        or not (.30<title['x']/width<.70 and .33<title['y']/height<.55)
+        or not (.35<close['x']/width<.65 and .55<close['y']/height<.70)):
+        return None
+    # The notice panel itself must contain only the approved body and Close.
+    # Do not confuse faded text outside the panel with modal controls.
+    if any(w is not title and w is not close and .18<x<.83 and .29<y<.71 for t,x,y,w in rows):return None
+    return dict(kind=_PASSIVE_FREE_NOTICE_BODIES[body],body=body,target=close)
+
+
+def tutorial_completed_notice_close(words,width=1600,height=900):
+    notice=passive_free_notice(words,width,height)
+    return notice['target'] if notice and notice['kind']=='tutorial_completed_notice' else None

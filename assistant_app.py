@@ -10,7 +10,7 @@ from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,
 from assistant_status import activity,scene_caption
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','电脑客户端':'pc'}
-TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater'}
+TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater','买企鹅（实验性）':'penguin'}
 
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False):
@@ -60,7 +60,7 @@ class Assistant:
         content=tk.Frame(outer,bg=BG);content.pack(fill='both',expand=True,padx=20,pady=(16,12));outer=content
         tk.Label(outer,text='第七史诗 / 统一推进助手',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
         tk.Label(outer,text='统一推进助手',bg=BG,fg=INK,font=('Microsoft YaHei UI',22,'bold')).pack(anchor='w',pady=(4,2))
-        tk.Label(outer,text='剧情 / 深渊 / 圣女3-7 / 月光剧场 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
+        tk.Label(outer,text='剧情 / 深渊 / 月光剧场 / 买企鹅 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
         connection.columnconfigure(1,weight=1)
         self.client=tk.StringVar(value='自动识别')
@@ -75,9 +75,14 @@ class Assistant:
             self.import_button.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(7,0))
         self.target_box=self.combo(connection,'绑定实例',self.instance,[],1,columnspan=2)
         self.task_box=self.combo(connection,'推进任务',self.task,list(TASKS),2,columnspan=2)
+        self.penguin_quantity=tk.StringVar(value=str(self.settings.get('penguin_quantity','')))
+        self.penguin_label=tk.Label(connection,text='企鹅总只数',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9))
+        self.penguin_label.grid(row=3,column=0,sticky='w',pady=4)
+        self.penguin_box=ttk.Spinbox(connection,from_=1,to=999999,textvariable=self.penguin_quantity,width=12)
+        self.penguin_box.grid(row=3,column=1,columnspan=2,sticky='ew',pady=4)
         self.client_box.bind('<<ComboboxSelected>>',lambda e:self.filter_targets())
         self.target_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
-        self.task_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
+        self.task_box.bind('<<ComboboxSelected>>',lambda e:(self.update_note(),self.update_buttons()))
         status_card=self.card(outer)
         tk.Label(status_card,text='当前步骤 / 需要处理的原因',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(anchor='w',pady=(0,4))
         tk.Label(status_card,textvariable=self.status,bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'),wraplength=550,justify='left').pack(anchor='w')
@@ -95,8 +100,9 @@ class Assistant:
         options=self.card(outer)
         self.run_policy=tk.Label(options,text='持续推进 · 不设次数上限',bg=CARD,fg=GREEN,font=('Microsoft YaHei UI',10,'bold'))
         self.run_policy.pack(anchor='w')
-        tk.Label(self.footer,text='开始即按当前队伍推进 · 不购买、不复活、不重试关卡 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
-        tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7).pack(fill='x',pady=(9,0))
+        tk.Label(self.footer,text='买企鹅仅按指定数量消费祭坛资源 · 不买体力、不复活、不重试关卡 · 换账号请用对应进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',9),wraplength=590,justify='left').pack(anchor='w',pady=(0,7))
+        self.task_guard=tk.Label(options,text='仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡',bg='#e8f4ec',fg=GREEN,font=('Microsoft YaHei UI',9),padx=8,pady=7)
+        self.task_guard.pack(fill='x',pady=(9,0))
         actions=tk.Frame(self.footer,bg=BG);actions.pack(fill='x')
         self.start_button=self.button(actions,'开始推进',self.start,GREEN,'white');self.start_button.pack(side='left',fill='x',expand=True,padx=(0,8))
         self.pause_button=self.button(actions,'暂停',self.pause,'#e2ebe5',INK);self.pause_button.pack(side='left',padx=(0,8))
@@ -141,6 +147,9 @@ class Assistant:
     def current_settings(self):
         value=dict(self.settings);value.pop('limit',None)
         value.update(client=CLIENTS[self.client.get()],task=TASKS[self.task.get()],pc_input='messages',start_policy='current_screen',fast_mode=True,observe=self.read_only)
+        if value['task']=='penguin':
+            from penguin_core import quantity
+            value['penguin_quantity']=quantity(self.penguin_quantity.get())
         return value
     def filter_targets(self):
         client=CLIENTS[self.client.get()]
@@ -151,7 +160,12 @@ class Assistant:
         else:self.instance.set('检测到多个目标，请手动选择')
         self.update_note()
     def update_note(self):
-        if hasattr(self,'wins_caption'):self.wins_caption.configure(text='本次观览' if TASKS[self.task.get()]=='theater' else '本次通关')
+        penguin=TASKS[self.task.get()]=='penguin'
+        if penguin:self.penguin_label.grid();self.penguin_box.grid()
+        else:self.penguin_label.grid_remove();self.penguin_box.grid_remove()
+        if hasattr(self,'run_policy'):self.run_policy.configure(text='按指定总只数购买 · 不超买、不补购资源' if penguin else '持续推进 · 不设次数上限')
+        if hasattr(self,'task_guard'):self.task_guard.configure(text='仅购买企鹅 · 不补购资源 · 未决扣费不重发' if penguin else '仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡')
+        if hasattr(self,'wins_caption'):self.wins_caption.configure(text='已购企鹅' if penguin else '本次观览' if TASKS[self.task.get()]=='theater' else '本次通关')
         try:target=self.selected_target();client=target['client']
         except ValueError:client=CLIENTS.get(self.client.get())
         if client=='mumu':
@@ -162,6 +176,8 @@ class Assistant:
             text+=' 次元探查仅完成部分导航验收，路线、抉择、招募与通关待实测；新界面留证后等待处理，不自动重打。'
         if TASKS[self.task.get()]=='theater':
             text+=' 月光剧场仅实验性 PC 后台：先手动打开剧场列表；每集仅允许明确的一张剧场门票，不购买。逐帧识别剧情翻页，战斗等待；剧目/集数或完成证据不完整则等待处理，整集与跨剧目尚未实机验收。'
+        if penguin:
+            text+=' 买企鹅为实验性 PC 后台模式：填写总只数（不是购买次数），圣域→精灵之森→成长祭坛→企鹅巢穴；每批最多以本帧为准，尾批精确调数。仅购买企鹅；未决扣费不重发。已验收导航与数量弹窗，实际扣费/结果闭环待授权实测。'
         if not self.settings.get('data_dir'):
             text+=' 首次开始会建立本机进度；已有记录先关联。不读取账号或服务器。'
         elif TASKS[self.task.get()] in ('mainline','saint_3_7'):
@@ -176,6 +192,7 @@ class Assistant:
     def update_buttons(self):
         alive=bool(self.process and self.process.poll() is None)
         label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
+        if TASKS[self.task.get()]=='penguin' and not self.read_only:label='继续购买' if self.mode=='paused' else '开始购买'
         if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','waiting_scene':'等待画面稳定…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
@@ -211,6 +228,7 @@ class Assistant:
     def lock_choices(self,locked):
         for widget in (self.client_box,self.target_box,self.task_box):widget.configure(state='disabled' if locked else 'readonly')
         self.refresh_button.configure(state='disabled' if locked else 'normal')
+        self.penguin_box.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def initial_scan(self):
         # A failed explicit resume must remain visible, never become idle.
@@ -247,7 +265,8 @@ class Assistant:
         except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
     def launch_worker(self,request):
         py=request['settings']['worker_python']
-        self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(self.run_dir/'request.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
+        request_path=self.run_dir/('mainline-maintenance-request.json' if request.get('mainline_maintenance') else 'request.json')
+        self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(request_path)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
         atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
         self.worker_warning='';self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
         child=self.process
@@ -273,9 +292,11 @@ class Assistant:
             self.task.set(next(k for k,v in TASKS.items() if v==self.settings['task']))
             self.targets=[request['target']];self.filter_targets()
             self.run_id=request['run_id'];self.run_dir=Path(request['run_dir'])
-            self.command('run')
+            if request.get('mainline_maintenance'):
+                atomic_json(self.run_dir/'control.json',dict(run_id=self.run_id,action='run',command_id=request['mainline_maintenance']['nonce']))
+            else:self.command('run')
             self.launch_worker(request)
-            self.log('已按明确维护指令重载原run；未更换请求、进度或观览链。')
+            self.log('已按明确维护指令重载原run；未更换原请求、进度或入场链。')
         except Exception as exc:
             self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
     def command(self,action):
@@ -317,6 +338,7 @@ class Assistant:
             if command.get('command_id') and command['command_id']!=self.gui_command_id:
                 self.gui_command_id=command['command_id']
                 if command.get('expected_run_id')==self.run_id and command.get('task') in TASKS.values() and command.get('action')=='restart':
+                    if command['task']=='penguin':raise ValueError('买企鹅不能通过维护重启重复旧订单；请停止后在界面确认总只数，再明确开始。')
                     self.pending_restart=command['task']
                     if self.process and self.process.poll() is None:self.stop()
             if self.pending_restart and not self.closing and (self.process is None or self.process.poll() is not None):
@@ -347,8 +369,8 @@ class Assistant:
 
 
 def main():
-    ap=ChineseArgumentParser();ap.add_argument('--resume-run');ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater'));args=ap.parse_args()
-    if args.resume_run and (args.autostart or args.ui_check or args.ui_exercise or args.task or args.client):
+    ap=ChineseArgumentParser();ap.add_argument('--resume-run');ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater','penguin'));ap.add_argument('--penguin-quantity');args=ap.parse_args()
+    if args.resume_run and (args.autostart or args.ui_check or args.ui_exercise or args.task or args.client or args.penguin_quantity is not None):
         ap.error('--resume-run不能与新开始、界面测试或改选目标组合。')
     locks=[]
     if not args.ui_check:
@@ -363,12 +385,15 @@ def main():
     root=tk.Tk();app=Assistant(root,args.ui_check,read_only=args.ui_exercise)
     if args.client:app.client.set(next(k for k,v in CLIENTS.items() if v==args.client))
     if args.task:app.task.set(next(k for k,v in TASKS.items() if v==args.task))
-    app.update_note()
+    if args.penguin_quantity is not None:app.penguin_quantity.set(args.penguin_quantity)
+    app.update_note();app.update_buttons()
     if args.resume_run:root.after(0,lambda:app.resume_existing(args.resume_run))
     if args.autostart and not args.ui_check and not args.ui_exercise:
         deadline=time.monotonic()+90
         def start_selected_once():
             if app.process is not None:return
+            if TASKS[app.task.get()]=='penguin' and args.penguin_quantity is None:
+                app.mode='blocked';app.status.set('自动开始买企鹅必须显式提供本次 --penguin-quantity，不能复用旧数量。');app.update_buttons();return
             if app.scanning or not app.filtered:
                 if time.monotonic()<deadline:root.after(500,start_selected_once);return
                 app.mode='blocked';app.status.set('90秒内未找到唯一可用客户端，未启动任务。');app.update_buttons();return

@@ -37,3 +37,52 @@ A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI h
 `test_friendship_notice.py` 验证好感度提示只操作本帧关闭控件，包括其覆盖在带右下角“确认”的战斗结算页时；只有“获得的道具”“战斗结果”和唯一结算确认同时成立才忽略底层按钮，其他确认、资源、复活、容量与战败覆盖层继续拦截。私有保存画面仅做离线OCR回放，不随源码分发。
 
 `test_stall_recovery.py` 覆盖CLEAR过渡帧到完整结算的连续观察、长时间画面/控件运动、缓慢渐变、轻微OCR位置抖动、稳定未知弹窗、停止打断、规划前过期重取与规划后异常保留意图、确认按钮位置/置信度/唯一性及底图弹窗优先。全部输入和历史使用模拟对象；`EPIC7_STALL_FIXTURES` 可指定私有事故回放目录，缺少则明确跳过。`test_abyss_wait.py` 补充深渊变化弹窗零输入与稳定后等待处理；`test_input_ux_gui.py` 检查等待画面时的暂停/停止和主按钮文字颜色。
+
+## 新号教学与当前run维护
+
+`test_tutorial.py`/`test_tutorial_ocr.py` 使用合成帧检查欢迎信、免费星星奖励、固定队伍基础攻击、双技能布局、教学跳过优先、未知引导零输入、双新帧/同页防重、关键写盘及角色姓名当前固定ROI复核。`test_era_map.py` 检查时代标题、缩小的绿色圈/双臂勾、当前纯剧情原入场链的裁切前行，推断行永不可点击、不推断星级。`test_mainline_maintenance.py` 检查原run来源哈希、目标/设置/停止/进程/STOP保护与显式单次免费故事重开消费；模拟失败/not_sent也不重用，保留原attempted及sent记录。所有输入与进程查询均模拟，不执行游戏操作，不携带账号或截图素材。
+
+
+`test_team_tutorial.py` 覆盖英雄选择面板含底层“进行任务”及部分OCR缺字时的入场否决、独立已配置标识/等级/血条/占位证据、原关卡配置链逐步持久防重、双新帧一次关闭、写盘失败/发送不明/not_sent不重发，以及已有active不归档/不返回。所有输入均模拟；`EPIC7_TUTORIAL_TEAM_FIXTURES` 可指向本机事故截图目录供生产OCR离线回放，缺失明确跳过，不随源码分发，不控制游戏。普通教学页面识别仍不等于实际开战授权。
+
+## Penguin Nest purchase mode (experimental PC)
+
+- `test_penguin.py`: exact item/modal/quantity/price/currency fields, missing/low-confidence/duplicate/wrong-product vetoes, current maximum rather than hard-coded batch sizes, precise tail adjustment, full-order budget checks, persisted intent-before-dispatch, same-target independent balance proof, pending/unknown/not-sent protection, unmodified mainline history and retained prior orders.
+- `test_penguin_worker.py`: fake-transport full worker orders of 51 (50+1) and 49 (Most then -1), no extra purchase, unexpected slider changes, mouse takeover before final down, persistent same-dialog/no-result dedup, unknown-screen zero input and insufficient full budget. No Windows capture/input APIs execute.
+- `test_penguin_gui.py`: required total count, task-specific field visibility, runtime locking, original unlimited battle modes, PC-only/observe rejection. Tk tests require the GUI runtime and are explicitly skipped in the embedded worker Python.
+
+Actual client screenshots/OCR/navigation evidence stay under ignored `.local`, never in fixtures or release sources. Live navigation/quantity acceptance is not proof of final resource deduction or post-purchase/multi-batch acceptance; those await an explicitly specified test quantity.
+
+- `test_tutorial_summon_return.py`：原免费圣约链后的仅返回导航；当前付费按钮零点击、私有返回字形完整性/暗化、双帧与来源链、持久发送防重，不将模拟测试当作抽取成功或主线通关。
+
+- `test_free_team_autoconfig.py` 和 `test_team_preparation.py` 原生Episode队伍专项：完整免费自动配置、已有地图/历史链、双帧与按关防重，以及无可用辅助/AUTO的三队标签单次入口；不扩展付费/强化或入场重试。
+
+- `test_spirit_altar_notice.py`：精灵祭坛与英雄觉醒完整功能说明只关闭；用途字段本帧双读，不覆盖原错误/低置信OCR，不把通知关闭当成觉醒或通关。
+
+- 高亮空位专项另测真实Runner优先配置且不产生入场记录、相邻分离蓝环/蓝色身体区分；卡片等级与星级合并时只加强当前数字字段并保留原OCR。私有现场接续与源哈希只写本地账号记录。
+
+- `test_first_entry_power_warning.py`：仅原唯一sent/完整无其他输入链的首次战力差确认；不点不再显示、不新建入场、不重试；缺损文案/资源/容量/失败/归档/剧情战斗链/发送未知均拒绝。章节阈值紧框和单次任务标签的当前双读专项见 `test_tutorial_ocr.py`。
+
+## 剧情跳过与结算聊天误点保护
+
+`test_story_skip_guard.py` 验证唯一/精确/高置信右上角跳过、残留结果字段否决、完整聊天面板（含连接动画）直接进入等待处理、残缺聊天标题阻断底层控件、发送前完整页面重识别、即时文字框双尺度纯识别均≥0.98且同值、控件局部像素/几何/一秒有效期、窗口/视口/截图尺寸变化、短黑帧零输入重观察、关键保存/证据失败，以及背景动画不等整屏静止。输入、进程和历史均模拟；不修改真实进度，不自动关闭聊天或重入关卡。
+
+可将 `EPIC7_CHAT_GUARD_FIXTURE` 指向本机私有目录，提供 `chat.png`、`chat-ocr.json`（含 `words`）及可选 `story.png`，回放聊天事故并用生产OCR验证正常剧情文字框。缺少素材明确跳过，不将本地账号截图、OCR和证据提交或打包。
+
+## 统一助手预览文件竞争
+
+`test_preview.py` 仅对展示缩略图模拟写入/替换失败，覆盖 Windows 真实无删除共享句柄、唯一临时文件/旧预览保留、后续恢复、警告与业务状态隔离、Stop 仍生效、状态持久化失败继续抛出。测试不启动客户端或发送游戏输入；入场/状态/证据不纳入 best-effort 范围。免费自动配置测试显式区分模拟帧采集时间，不依赖 Windows 墙钟在相邻两次函数调用间必定递增。
+
+## 免费故事入口消息应答
+
+`test_story_open_ack.py` 区分原消息sent、实际游戏接受和独立completed。覆盖原唯一入口保留、同run/窗口/双新帧/未完成节点及后继锁保护、2次额外消息的持久防重、任何实际流程/失败/其他输入否决、保存/证据/发送异常，以及明确维护来源和原run重载。原模拟记录仍为sent，不伪装not_sent，不修改通关表；全部输入模拟。私有现场截图和事件来源留在忽略目录。
+
+`test_tutorial_completed_notice.py` 验证完整未翻译教学通知的高置信/唯一/位置与陌生文案否决、关键持久化失败、原run单次关闭且不记通关。`test_era_map.py` 另测3条高置信编号行缺1条中间OCR时的编号归一化行距，仍需独立绿环/内部勾；不降低0.85行阈值、不生成可点击推测节点或星级。
+
+## 高频免费通知、鼠标悬停及最新展示图文件竞争
+
+`test_tutorial_completed_notice.py` 现测背景“确认自己”不误作按钮、已知免费正文表/未知命名空间拒绝、按次通知双帧关闭/消失后重新待命、未知/OCR缺字/仍有弹窗边框不解锁、旧run/关卡关闭记录保留、同一次有界重发与关键留证失败。`test_input_ux.py` 增加客户区悬停/移动零抢焦点且不中断、实际按住鼠标仍保护。`test_capture_display.py` 覆盖独立截图+OCR留证后才容忍展示替换错误、Win32真实不共享删除句柄与恢复，关键证据/编码/临时写入/事件记录失败仍抛出；不通过旧latest授权输入。
+
+`test_map_number_verification.py` 独立验证本帧地图编号，不提高低置信名称分数：两个≥0.98编号读数必须与当前原前缀一致，唯一蓝色当前行与本帧裁剪哈希/采集时间绑定，画面/数字变化、未知弹窗或读数不一致均拒绝。当前私有实图编号双读>0.999，仍不把罗马数字后缀伪造为高置信名称。
+
+- `test_story_open_ack.py` now also exercises the production notice→dismissal→same-entry response chain, the one-frame disappearance race, legacy receipt/pixel replay, OCR gaps, repeated occurrences, mutated/foreign/incomplete receipts, paid/archived/accepted entries and critical evidence/journal failures. All input remains mocked; a passed chain test is not a live game acceptance.

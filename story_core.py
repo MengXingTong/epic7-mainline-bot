@@ -125,10 +125,61 @@ def auto_enabled(f):
     return np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
 
 def team_entry_control(f):
+    """Public entry reader: highlighted setup always vetoes entry."""
+    from tutorial_core import guided_team_slot_visible
+    if guided_team_slot_visible(f):
+        return dict(kind='unknown',target=None,proof='教学高亮配置空位仍可见；不向底层进行任务发送入场')
+    return _team_entry_layout(f)
+
+
+def _team_entry_layout(f):
     """Read the preparation layout; hosted/repeat controls are never tap targets."""
     unknown=dict(kind='unknown',target=None,proof='队伍页布局或自动战斗控件尚未明确识别')
+    from tutorial_core import owned_hero_selector_visible
+    if owned_hero_selector_visible(f):return unknown
     if f.find(r'^(确认|确定|確認|確定|取消)$'):return unknown
-    if f.any('重复战斗','连续战斗','重复进行','托管次数','托管中'):return unknown
+    if any(re.search(r'重复战斗|连续战斗|重复进行|托管次数|托管中',w['text']) for w in f.words):return unknown
+    story_anchors=[
+        f.find(r'^准备战斗$',(60,10,260,80)),
+        f.find(r'^故事队伍$',(25,80,155,150)),
+        f.find(r'^故事队伍$',(220,80,380,140)),
+        f.find(r'^故事$',(200,160,1000,350)),
+        f.find(r'^闯关成功$',(1180,200,1380,250)),
+        f.find(r'^完成故事$',(1180,245,1380,290)),
+        f.find(r'^1名以上英雄存活$',(1180,280,1450,325)),
+        f.find(r'^登场的敌人$',(1180,330,1450,395)),
+        f.find(r'^[-−一·—–－]?\s*队伍战斗力$',(300,770,560,835)),
+        f.find(r'^管理队伍$',(25,815,200,899)),
+        f.find(r'^进行任务$',(1300,770,1599,899)),
+    ]
+    if all(w and w['score']>=(.90 if index==8 else .95) for index,w in enumerate(story_anchors)) and not f.find(r'^AUTO$') and not f.any('托管战斗','辅助英雄'):
+        return dict(kind='single_task',target=story_anchors[-1],
+                    proof='已识别故事固定队伍、三项关卡任务与普通单次入口；不宣称已开启自动，仍需地图/标题/体力/历史链')
+    # The observed native Episode party has neither the old AUTO option nor
+    # an eligible support slot. This only identifies a SINGLE-entry button;
+    # Runner still validates map/name/resource/history and persists its intent.
+    episode_specs=[
+        (r'准备战斗',(60,10,260,80),.98),
+        (r'Episode1队',(20,80,160,160),.98),
+        (r'Episode2队',(20,165,160,235),.98),
+        (r'Episode3队',(20,240,160,310),.98),
+        (r'闯关成功',(1180,200,1380,250),.98),
+        (r'完成故事',(1180,245,1380,290),.98),
+        (r'1名以上英雄存活',(1180,280,1450,325),.98),
+        (r'登场的敌人',(1180,330,1450,395),.98),
+        (r'辅助英雄无法参与',(880,560,1115,650),.98),
+        (r'[-−一·—–－]?\s*队伍战斗力',(300,770,560,835),.90),
+        (r'管理队伍',(25,815,200,899),.98),
+        (r'进行任务',(1300,770,1599,899),.98),
+    ]
+    episode_anchors=[]
+    for pattern,(x1,y1,x2,y2),score in episode_specs:
+        words=[w for w in f.words if re.fullmatch(pattern,w['text']) and w['score']>=score
+               and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        episode_anchors.append(words[0] if len(words)==1 else None)
+    if all(episode_anchors) and not f.find(r'^AUTO$') and not any('托管战斗' in w['text'] for w in f.words):
+        return dict(kind='single_task',target=episode_anchors[-1],
+                    proof='已识别原生Episode三队标签、三项关卡任务、辅助英雄无法参与和普通单次入口；不推断战斗内AUTO状态')
     empty_support=f.find(r'^辅助英雄$',(920,530,1095,625))
     auto=f.find(r'^AUTO$',(880,625,1100,730))
     if auto:

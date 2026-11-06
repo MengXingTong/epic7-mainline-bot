@@ -84,8 +84,13 @@ class MainlineEntryTests(unittest.TestCase):
         r=team_runner();r.action.side_effect=InputDeliveryError('unknown')
         with self.assertRaises(InputDeliveryError):self.step(r)
         self.assertFalse(can_enter(r.s,'E4-C1-S4'))
-        r.action.reset_mock();r.action.side_effect=None;self.step(r)
-        r.action.assert_not_called();self.assertIn('E4-C1-S4',r.s['attempted'])
+        original=copy.deepcopy(r.s['active'])
+        r.action.reset_mock();r.action.side_effect=None
+        with self.assertRaises(TaskAttention) as caught:self.step(r)
+        self.assertEqual(caught.exception.code,'team_entry_pending')
+        r.action.assert_not_called();r.back.assert_not_called()
+        self.assertEqual(r.s['active'],original);self.assertNotIn('unresolved_entries',r.s)
+        self.assertIn('E4-C1-S4',r.s['attempted'])
 
     def test_durable_write_failure_stops_before_entry_input(self):
         r=team_runner();r.save.side_effect=OSError('disk full')

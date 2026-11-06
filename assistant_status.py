@@ -10,9 +10,9 @@ class Activity:
 
 
 def activity(mode, task="mainline", observe=True, alive=False):
-    task_name = {'mainline':'剧情关卡','saint_3_7':'圣女3-7','dimension':'次元探查（实验性）','theater':'月光剧场（实验性）'}.get(task,'普通深渊')
+    task_name = {'mainline':'剧情关卡','saint_3_7':'圣女3-7','dimension':'次元探查（实验性）','theater':'月光剧场（实验性）','penguin':'买企鹅（实验性）'}.get(task,'普通深渊')
     if mode in ("starting", "checking") and alive:
-        return Activity("检查中 · 尚未进入关卡", "#2465a4", True)
+        return Activity("检查中 · 尚未购买" if task=="penguin" else "检查中 · 尚未进入关卡", "#2465a4", True)
     if mode in ("run", "observe", "waiting_input", "waiting_scene") and not alive:
         return Activity("已停止 · 工作进程不在运行", "#a63d34")
     states = {

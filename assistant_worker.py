@@ -1,6 +1,6 @@
 """One private worker for mainline/Abyss on MuMu/PC. No GUI, no supervisor retries."""
 from __future__ import annotations
-import  hashlib, json, os, subprocess, sys, time, traceback
+import  hashlib, json, os, subprocess, sys, tempfile, time, traceback
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 sys.path.insert(1,str(Path(__file__).resolve().parent/'vendor'))
@@ -16,6 +16,7 @@ class PauseRun(Exception):pass
 class Control:
     def __init__(self,request):
         self.request=request;self.folder=Path(request['run_dir']);self.run_id=request['run_id'];self.started=time.monotonic()
+        self.preview_warning=''
         self.last={'mode':'starting','status':'正在连接','scene':'—','wins':0,'task':request['settings']['task'],'client':request['target']['client']}
     def check(self):
         command=read_json(self.folder/'control.json',{})
@@ -26,14 +27,38 @@ class Control:
         self.last.update(values)
         if status is not None:self.last['status']=status
         self.last.update(elapsed=int(time.monotonic()-self.started),updated_at=time.time(),run_id=self.run_id)
-        atomic_json(self.folder/'status.json',self.last)
-        print(json.dumps(dict(kind='status',**self.last),ensure_ascii=False),flush=True)
+        # The preview warning is presentation-only; keep it separate from business
+        # warnings so a later successful preview cannot clear or retain the wrong one.
+        shown=dict(self.last)
+        if self.preview_warning and shown.get('mode')!='blocked':
+            shown['warning']='\n'.join(filter(None,(shown.get('warning',''),self.preview_warning)))
+        atomic_json(self.folder/'status.json',shown)
+        print(json.dumps(dict(kind='status',**shown),ensure_ascii=False),flush=True)
     def log(self,text):
         print(json.dumps({'kind':'log','text':text},ensure_ascii=False),flush=True)
     def preview(self,image):
         from PIL import Image
         image=image.copy();image.thumbnail((560,315),Image.Resampling.BILINEAR)
-        p=self.folder/'preview.tmp.png';image.save(p,compress_level=1);os.replace(p,self.folder/'preview.png')
+        temporary=None;warning=''
+        try:
+            # Only the GUI thumbnail is best-effort. Never apply this handling to
+            # screenshots/evidence, entry intents, progress, or control/status writes.
+            with tempfile.NamedTemporaryFile(dir=self.folder,prefix='.preview-',suffix='.png',delete=False) as stream:
+                temporary=Path(stream.name);image.save(stream,format='PNG',compress_level=1)
+            os.replace(temporary,self.folder/'preview.png')
+        except OSError as exc:
+            code=getattr(exc,'winerror',None)
+            detail='系统错误 '+str(code) if code is not None else '错误码 '+str(exc.errno) if exc.errno is not None else type(exc).__name__
+            warning='画面预览暂时无法更新（'+detail+'）；稍后重新更新，不使用旧预览发送输入。'
+        finally:
+            # Clean up this invocation's temporary only, never a prior preview.
+            if temporary is not None:
+                try:temporary.unlink(missing_ok=True)
+                except OSError:pass
+        if warning!=self.preview_warning:
+            self.log(warning or '画面预览已恢复更新。')
+        self.preview_warning=warning
+        return not warning
     def sleep(self,seconds):
         end=time.monotonic()+seconds
         while time.monotonic()<end:self.check();time.sleep(min(.2,max(0,end-time.monotonic())))
@@ -73,7 +98,7 @@ class GuardedApi:
 
 def client_attention(exc):
     if isinstance(exc,InputBusy):
-        return TaskAttention('client_input','输入被接管，已暂停','检测到鼠标或按键接管，当前操作已暂停。请松开按键或移出客户区后点继续，重新读取画面；已记录的入场意图保留，不会再次开战。')
+        return TaskAttention('client_input','输入被接管，已暂停','检测到鼠标或按键接管，当前操作已暂停。请松开实际按住的鼠标/按键后点继续，重新读取画面；已记录的入场意图保留，不会再次开战。')
     return TaskAttention('client_input','客户端操作已暂停',str(exc)+'；确认客户端后点继续，重新截图；若窗口/进程已更换，请停止并重选实例。')
 
 
@@ -295,6 +320,7 @@ def mainline_run(request,control):
     root,state=validate_run(settings,target,allow_reconcile=True)
     cfg=read_json(root/'config.json',{})
     cfg.update(max_battle_seconds=cfg.get('max_battle_seconds',1800),start_policy=settings.get('start_policy','current_screen'),fast_mode=settings.get('fast_mode',True))
+    cfg['new_account_tutorial']=bool(settings.get('new_account_tutorial',False))
     if target['client']=='mumu':
         cfg.update(settings['mumu']);cfg.update(backend='mumu_adb',serial=target['serial'],package=target['package'])
     else:
@@ -311,6 +337,11 @@ def mainline_run(request,control):
         def ensure_game(self):control.check();return super().ensure_game()
         def adb(self,*args,**kwargs):control.check();return super().adb(*args,**kwargs)
     r=ControlledRunner(observe=True)
+    r.run_id=request.get('run_id')  # Historical offline/CLI callers have no same-run resend authority.
+    from story_open_ack import StoryOpenAcknowledgement
+    r.story_open_ack=StoryOpenAcknowledgement(r)
+    from free_notices import FreeNoticeController
+    r.free_notices=FreeNoticeController(r)
     backend=None
     if target['client']=='pc':
         from pc_backend import PcBackend
@@ -325,7 +356,20 @@ def mainline_run(request,control):
         frame=r.capture()
         control.status('主线窗口与进度预检通过；未读取账号，本次未进入关卡。',mode='done',scene=classify(frame),wins=0,total_completed=len(r.s['completed']))
         return
-    if not settings['observe']:r.start_current_screen()
+    if not settings['observe']:
+        if request.get('mainline_maintenance'):
+            from mainline_maintenance import validate_maintenance
+            proof=validate_maintenance(request,root,r.s)
+            if target['client']=='pc':
+                from dataclasses import asdict
+                if proof.get('target_snapshot')!=asdict(backend.window):raise ValueError('维护窗口几何已变化；不加载旧入口响应链。')
+            if proof.get('seed_story_open_ack'):
+                from story_open_ack import seed_original_open
+                r.capture()  # Fresh positive page, never an input.
+                seed_original_open(r,proof['seed_story_open_ack'],proof)
+            r.s.setdefault('mainline_maintenance_reloads',[]).append(proof)
+            r.s.pop('attention',None);r.save()
+        else:r.start_current_screen()
     from story_core import StoryController
     r.story=StoryController(r,settings)
     count=lambda:len(r.s['completed'])+r.story.total_wins()
@@ -342,6 +386,8 @@ def mainline_run(request,control):
                 if request.get('once'):return
                 cycle.wait(control);continue
             scene=classify(frame)
+            r.story_open_ack.observe_scene(scene,frame)
+            r.free_notices.observe_scene(scene,frame)
             if wait_for_input(control,backend):
                 pacer.reset();stability.reset();r.mode_since=time.time();continue
             if needs_stability_wait(scene,victory_verified=scene=='victory' and victory_objectives_verified(frame)):
@@ -367,7 +413,7 @@ def mainline_run(request,control):
             delay_scene='natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene
             delay=next_delay(delay_scene,delay,acted)
             wins=count()-baseline
-            control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning=getattr(r,'report_warning',''),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
+            control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning='\n'.join(filter(None,(getattr(r,'report_warning',''),getattr(r,'capture_warning','')))),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
             if not keep:return
             if delay_scene in ('network_error','natural_resource_wait'):control.sleep(delay)
             else:cycle.wait(control)
@@ -434,7 +480,7 @@ def prepare_selected_profile(request,control):
         ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2);results,_=ocr(raw)
         scene=classify(Frame(raw,results))
         if scene not in ('map','lobby'):
-            verified_dimension=False;verified_theater=False
+            verified_dimension=False;verified_theater=False;verified_penguin=False
             if settings.get('task')=='dimension':
                 from abyss_core import Observation,Token
                 from dimension_core import classify as dimension_classify
@@ -447,7 +493,11 @@ def prepare_selected_profile(request,control):
                 observation=read_observation(snap.image,lambda image:(results,None),snap.captured_at)
                 reading=theater_classify(TheaterVision().apply(snap.image,observation))
                 verified_theater=reading.scene=='theater_list' and reading.episode is not None
-            if not (verified_dimension or verified_theater):raise RuntimeError('首次使用请停在大厅、主线地图、已识别的次元探查页面或可核实剧目/集数的月光剧场列表；没有创建进度或发送点击。')
+            if settings.get('task')=='penguin':
+                from penguin_vision import read_observation as penguin_observation
+                from penguin_core import classify as penguin_classify
+                verified_penguin=penguin_classify(penguin_observation(snap.image,ocr,snap.captured_at)).scene in ('penguin_lobby','penguin_sanctuary','penguin_forest','penguin_altar','penguin_dialog')
+            if not (verified_dimension or verified_theater or verified_penguin):raise RuntimeError('首次使用请停在大厅、主线地图、已识别的次元探查页面、可核实剧目/集数的月光剧场列表或已核实的企鹅购买页面；没有创建进度或发送点击。')
         transport.ensure();control.check()
         root,_=initialize_selected(True)
         settings.update(data_dir=str(root),portable_first_use=False)
@@ -493,6 +543,9 @@ def run_request(request):
                     elif request['settings']['task']=='theater':
                         from theater_worker import run as theater_run
                         theater_run(request,control)
+                    elif request['settings']['task']=='penguin':
+                        from penguin_worker import run as penguin_run
+                        penguin_run(request,control)
                     elif request['settings']['task']=='abyss':abyss_run(request,control)
                     elif request['settings']['observe']:observe_mainline(request,control)
                     else:mainline_run(request,control)

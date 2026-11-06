@@ -156,5 +156,10 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(r.s['victories'],1)
     def test_no_second_entry_with_active_record(self):
         f=fake([('进行任务',1440,828),('队伍战斗力',400,806),('8/774',1264,831)])
-        r=self.make_runner(f);r.s['active']={'key':'E2-C6-S2'};r.step(f);self.assertTrue(r.calls[0].startswith('STOP: 已记录一次入场'))
+        from task_blockers import TaskAttention
+        r=self.make_runner(f);r.s['active']={'key':'E2-C6-S2'};original=copy.deepcopy(r.s['active'])
+        with self.assertRaises(TaskAttention) as caught:r.step(f)
+        self.assertEqual(caught.exception.code,'team_entry_pending')
+        self.assertEqual(r.calls,[]);self.assertEqual(r.s['active'],original)
+        self.assertNotIn('unresolved_entries',r.s)
 if __name__=='__main__': unittest.main(verbosity=2)

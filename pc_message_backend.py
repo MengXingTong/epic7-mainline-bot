@@ -47,18 +47,14 @@ class MessageWin32Api(Win32Api):
         return pixels
 
     def input_block_reason(self,s):
-        # Read-only arbitration. Occluding apps own their own mouse; do not
-        # pause just because their screen rectangle overlaps the game.
+        # Hover is not ownership. Only an actually held button/modifier blocks
+        # new background presses; never move the user's pointer or steal focus.
         with self.dpi():
             point=self.w.POINT()
             if not self.u.GetCursorPos(self.c.byref(point)):
                 return '当前桌面鼠标状态暂不可读，等待桌面可用后自动继续。'
             if any(self.u.GetAsyncKeyState(key)&0x8000 for key in (1,2,4,5,6,0x10,0x11,0x12)):
                 return '检测到鼠标按键或修饰键按住，松开后自动继续。'
-            if s.x<=point.x<s.x+s.width and s.y<=point.y<s.y+s.height:
-                hwnd=self.u.WindowFromPoint(point)
-                if self.u.GetAncestor(hwnd,2)==s.hwnd:
-                    return '鼠标位于游戏客户区，移出后自动继续；不会移动你的鼠标。'
         return ''
 
     def _input_available(self):

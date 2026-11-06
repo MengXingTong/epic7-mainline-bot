@@ -29,6 +29,11 @@ def row_markers(image,hsv,y,lock_template=None):
     area=max(1,np.count_nonzero(ring))
     cyan_score=float(np.count_nonzero(cyan&ring)/area)
     outline_green=float(np.count_nonzero(green&ring)/area)
+    # Era maps shrink completed (nonselected) nodes. Keep the independent
+    # ring AND internal check-template requirements, not green counts alone.
+    small_ring=(distance>=29**2)&(distance<=43**2)
+    small_outline=float(np.count_nonzero(green&small_ring)/max(1,np.count_nonzero(small_ring)))
+    outline_green=max(outline_green,small_outline)
     patch=hsv[max(0,y+7):min(image.shape[0],y+43),77:112]
     green_pixels=int(np.count_nonzero((patch[:,:,0]>=32)&(patch[:,:,0]<=85)&(patch[:,:,1]>115)&(patch[:,:,2]>90)))
     badge_score=0.0
@@ -39,7 +44,14 @@ def row_markers(image,hsv,y,lock_template=None):
             if binary.shape[0]>=template.shape[0] and binary.shape[1]>=template.shape[1]:
                 _,score,_,(x,z)=cv2.minMaxLoc(cv2.matchTemplate(binary,template,cv2.TM_CCOEFF_NORMED))
                 candidate=binary[z:z+template.shape[0],x:x+template.shape[1]]
-                if float(np.mean(candidate[tick>0]>0))>=.5:badge_score=max(badge_score,score)
+                _,xx=np.ogrid[:template.shape[0],:template.shape[1]]
+                center=(template.shape[1]-1)/2
+                short=(tick>0)&(xx<center);long=(tick>0)&(xx>center)
+                # Both check arms must be present. A ring intersecting a
+                # nearby outline can otherwise mimic just the long stroke.
+                if (float(np.mean(candidate[tick>0]>0))>=.5
+                    and float(np.mean(candidate[short]>0))>=.5
+                    and float(np.mean(candidate[long]>0))>=.5):badge_score=max(badge_score,score)
     lock_score=0.0
     if lock_template is not None:
         gray=cv2.cvtColor(image[max(0,y+4):min(image.shape[0],y+48),68:119],cv2.COLOR_BGR2GRAY)
@@ -83,3 +95,34 @@ def is_cleared(row):
 
 def is_unlocked(row):
     return bool(row and 'lock_score' in row and not row.get('locked',row['lock_score']>.81))
+
+
+def clipped_story_completion(frame,entry,selected,rows):
+    """Read only the clipped predecessor of an ORIGINAL active story entry.
+
+    No inferred row is ever clickable. Three high-confidence indexed labels
+    establish the observed grid (one intermediate OCR row may be absent); the predecessor still needs an independent ring/check.
+    This is not evidence for an unattempted/archived story, battle or star count.
+    """
+    if entry.get('entry_kind')!='story_only' or selected.get('locked'):return None
+    if (selected.get('episode'),selected.get('chapter'),selected.get('stage'))!=(entry.get('episode'),entry.get('chapter'),entry.get('stage',-2)+1):return None
+    ordered=sorted(rows,key=lambda row:row['stage'])
+    nearby=[row for row in ordered if selected['stage']<=row['stage']<=selected['stage']+3][:3]
+    if len(nearby)!=3 or nearby[0]['stage']!=selected['stage']:return None
+    steps=[nearby[i+1]['stage']-nearby[i]['stage'] for i in (0,1)]
+    if any(step not in (1,2) for step in steps):return None
+    gaps=[(nearby[i+1]['y']-nearby[i]['y'])/steps[i] for i in (0,1)]
+    if not all(121<=gap<=129 for gap in gaps) or abs(gaps[0]-gaps[1])>3:return None
+    y=nearby[0]['y']-sum(gaps)/2
+    if not 158<=y<=185 or selected.get('cyan',0)<.055:return None
+    hsv=cv2.cvtColor(frame.image,cv2.COLOR_BGR2HSV)
+    from pathlib import Path
+    template_path=Path(__file__).resolve().parent/'assets'/'lock.png'
+    template=cv2.imdecode(np.frombuffer(template_path.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE) if template_path.is_file() else None
+    if template is None:return None
+    markers=row_markers(frame.image,hsv,round(y),template)
+    if not markers['clear_badge']:return None
+    return dict(stage=entry['stage'],name=entry['name'],y=y,**markers,
+                source='current_run_clipped_story_predecessor',
+                grid=[dict(stage=row['stage'],y=row['y']) for row in nearby],
+                star_count=None,clickable=False)

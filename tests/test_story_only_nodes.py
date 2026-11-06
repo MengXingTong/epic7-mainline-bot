@@ -81,6 +81,15 @@ class StoryOnlyNodeTests(unittest.TestCase):
         self.assertEqual(r.s['completed']['E4-C4-S3']['proof'],'返回地图后，纯剧情节点出现绿色已通关勾')
         self.assertEqual(r.action.call_args.args[0],'未通关验证通过，准备战斗')
 
+    def test_recent_battle_entry_transient_map_keeps_active_and_never_resends(self):
+        r=fake_runner(frame('准备战斗'));d=r.map_ticket(r.frame)[0]
+        r.s['active']={**d,'start_epoch':time.time(),'cost':8}
+        r.s['attempted'][d['key']]=dict(r.s['active']);before=copy.deepcopy(r.s['active'])
+        keep,_=self.step(r);self.assertTrue(keep)
+        self.assertEqual(r.s['active'],before);r.action.assert_not_called();self.assertNotIn('unresolved_entries',r.s)
+        r.s['active']['start_epoch']=time.time()-16;keep,_=self.step(r)
+        self.assertFalse(keep);self.assertIsNotNone(r.s['active']);r.action.assert_not_called()
+
     def test_unchanged_map_after_sent_story_click_waits_then_requires_attention(self):
         r=fake_runner(frame());ticket=r.map_ticket(r.frame)[0]
         r.s['attempted'][ticket['key']]={'entry_kind':'story_only'}
