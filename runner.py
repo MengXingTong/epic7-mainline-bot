@@ -11,7 +11,8 @@ from ui_text import ChineseArgumentParser,error_text,scene_name
 from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES,battle_settlement_confirm,date_change_notice_close,chat_panel_visible,chat_panel_heading,top_right_skip_control,tutorial_completed_notice_close
-from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked,clipped_story_completion
+from map_identity import chapter_header,same_chapter,stage_key,stage_order,native_forward_chapter
+from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked,clipped_story_completion,complete_map_row_labels
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 from story_core import team_entry_control
 from tutorial_core import tutorial_plan,TutorialController,chapter_reward_pending,owned_hero_selector_visible
@@ -25,9 +26,9 @@ from rapidocr_onnxruntime import RapidOCR
 TZ = dt.timezone(dt.timedelta(hours=8))
 def now(): return dt.datetime.now(TZ).isoformat(timespec='seconds')
 def norm(s): return re.sub(r'[\s，。！？：:,.!?·…+－_—\-|ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIl]+', '', s).lower()
-def atomic_json(path, value):
+def atomic_json(path, value, *, compact=False):
     tmp = path.with_name(path.name + '.tmp')
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=None if compact else 2, separators=(',',':') if compact else None), encoding='utf-8')
     os.replace(tmp, path)
 def write_status_report(path,text):
     """Best-effort display report only; never use this for progress/evidence writes."""
@@ -105,20 +106,23 @@ def selected_node(f):
     p=CODE_ROOT/'assets'/'lock.png'
     lock_template=cv2.imdecode(np.frombuffer(p.read_bytes(),np.uint8),cv2.IMREAD_GRAYSCALE) if p.exists() else None
     rows=[]
-    for w in f.words:
+    for w in complete_map_row_labels(f.words,frame=f):
         m=re.match(r'^\s*(\d{1,2})\s*[.．、。]\s*(.+)',w['text'])
         if not m or not (100<=w['x']<=650 and 190<=w['y']<=730):continue
         number_proof=None
         if w['score']<.85:
             proof=w.get('stage_number_verification') or {};crop=proof.get('crop',[]);scores=proof.get('scores',[])
-            if (proof.get('source')!='current_map_numeric_prefix_dual_read' or proof.get('number')!=int(m.group(1))
-                or proof.get('captured_at')!=f.at or len(scores)!=2 or min(scores)<.98 or len(crop)!=4):continue
+            if (proof.get('source') not in ('current_map_numeric_prefix_field_read','current_map_numeric_prefix_dual_read') or proof.get('number')!=int(m.group(1))
+                or proof.get('captured_at')!=f.at or len(scores)!=(1 if proof.get('source')=='current_map_numeric_prefix_field_read' else 2) or min(scores)<.98 or len(crop)!=4):continue
             x1,y1,x2,y2=crop
             if not (0<=x1<x2<=1600 and 0<=y1<y2<=900):continue
             if hashlib.sha256(f.image[y1:y2,x1:x2].tobytes()).hexdigest()!=proof.get('crop_sha256'):continue
             number_proof=proof
         y=int(round(w['y']))
         row=dict(stage=int(m.group(1)),name=m.group(2),y=y,x=w['x'],**row_markers(f.image,hsv,y,lock_template))
+        if w.get('label_components'):row['name_components']=copy.deepcopy(w['label_components'])
+        if w.get('label_verification'):row['name_verification']=copy.deepcopy(w['label_verification'])
+        if w.get('stage_label_pending'):row['name_complete']=False
         if number_proof:row.update(number_verification=copy.deepcopy(number_proof),name_score=w['score'])
         rows.append(row)
     rows.sort(key=lambda row:row['cyan'],reverse=True)
@@ -289,12 +293,15 @@ class Runner:
         im=cv2.resize(raw,(1600,900)) if (w,h)!=(1600,900) else raw
         return im,(w,h)
     def capture(self):
+        capture_started=time.perf_counter()
         im,(w,h)=self._capture_pixels()
-        captured_at=time.time()
+        captured_at=time.time();ocr_started=time.perf_counter()
         results,_=self.ocr(im)
+        ocr_finished=time.perf_counter()
         f=Frame(im,results,(w,h));f.at=captured_at
-        from tutorial_ocr import strengthen_actor,strengthen_enemy_levels,strengthen_chapter_reward_thresholds,strengthen_orbis_unlock_notice,strengthen_summon_promo_title,strengthen_owned_unit_levels,strengthen_preparation_cost,strengthen_free_single_summon_label,strengthen_wishlist_close,strengthen_wishlist_count,strengthen_spirit_altar_purpose,strengthen_owned_card_level,strengthen_preparation_entry_label,strengthen_map_stage_number
+        from tutorial_ocr import strengthen_actor,strengthen_enemy_levels,strengthen_chapter_reward_thresholds,strengthen_orbis_unlock_notice,strengthen_summon_promo_title,strengthen_owned_unit_levels,strengthen_preparation_cost,strengthen_free_single_summon_label,strengthen_wishlist_close,strengthen_wishlist_count,strengthen_spirit_altar_purpose,strengthen_owned_card_level,strengthen_preparation_entry_label,strengthen_map_stage_number,strengthen_map_row_label
         strengthen_map_stage_number(f,self.ocr)
+        strengthen_map_row_label(f,self.ocr)
         strengthen_actor(f,self.ocr)
         strengthen_enemy_levels(f,self.ocr)
         strengthen_chapter_reward_thresholds(f,self.ocr)
@@ -308,6 +315,7 @@ class Runner:
         strengthen_wishlist_close(f,self.ocr)
         strengthen_wishlist_count(f,self.ocr)
         strengthen_spirit_altar_purpose(f,self.ocr)
+        enrichment_finished=time.perf_counter()
         self.frame=f
         encoded_ok,encoded=cv2.imencode('.png',im)
         if not encoded_ok:raise OSError('当前截图编码失败；未发送输入。')
@@ -320,12 +328,17 @@ class Runner:
         if energy:
             m=re.search(r'(\d+)\s*/\s*(\d+)',energy['text'])
             if m and int(m.group(2))>=100: self.s['stamina']=int(m.group(1))
+        f.capture_timings=dict(capture_ms=round((ocr_started-capture_started)*1000,2),
+                               full_ocr_ms=round((ocr_finished-ocr_started)*1000,2),
+                               enrichment_ms=round((enrichment_finished-ocr_finished)*1000,2),
+                               capture_total_ms=round((time.perf_counter()-capture_started)*1000,2))
         return f
     def save(self):
         self.s['updated_at']=now(); self.s['worker_pid']=os.getpid()
         self.s['manual_clears']=sum(1 for item in self.s.get('completed',{}).values() if item.get('manual_completed'))
         self.s['script_victories']=self.s.get('victories',0)-self.s['manual_clears']
-        atomic_json(ROOT/'state.json',self.s)
+        atomic_json(ROOT/'state.json',self.s,compact=True)
+        self._saved_observation=self._observation_signature()
         active=self.s.get('active') or self.ticket or {}
         text=(f"# 第七史诗主线运行状态\n\n- 状态：**{self.s.get('status','启动中')}**\n- 更新时间：{self.s['updated_at']}（北京时间）\n- 当前/最近关卡：{active.get('key',self.s.get('last_stage','待识别'))} {active.get('name','')}\n- 本次已确认通关：{self.s.get('victories',0)} 关（脚本 {self.s.get('script_victories',0)}，用户手动补过 {self.s.get('manual_clears',0)}）\n- 最近读取体力：{self.s.get('stamina','未读取')}\n- 说明：{self.s.get('reason','')}\n- 最后动作：{self.s.get('last_action','无')}\n\n安全规则：不兑换/购买体力；不点重复挑战；已尝试关卡不再次入场；无法确认未通关时停止。\n\n最近画面见 latest.png；动作与安全检查见 events.jsonl；通关/尝试记录见 state.json。\n")
         previous=getattr(self,'report_warning','')
@@ -333,6 +346,10 @@ class Runner:
         if self.report_warning!=previous:
             message=self.report_warning or '状态报告已恢复更新。'
             print(json.dumps({'kind':'log','text':message},ensure_ascii=False),flush=True)
+    def _observation_signature(self):
+        return tuple(self.s.get(k) for k in ('status','screen','reason','stamina'))+((self.s.get('active') or {}).get('key'),)
+    def save_observation(self):
+        if getattr(self,'_saved_observation',None)!=self._observation_signature():self.save()
     def evidence(self,label):
         p=ROOT/'evidence'/f"{dt.datetime.now(TZ):%H%M%S}-{label}.png"; p.parent.mkdir(exist_ok=True)
         p.write_bytes(cv2.imencode('.png',self.frame.image)[1].tobytes())
@@ -353,8 +370,7 @@ class Runner:
             '跳过剧情':'story','确认跳过剧情':'skip_confirm','通关星级页继续至结算':'victory',
         }
         return bool(kind in ordinary and ordinary[kind]==self.s.get('screen')
-                    and (not self.s.get('active') or kind in ('跳过剧情','确认跳过剧情','通关星级页继续至结算'))
-                    and getattr(self,'pc',None))
+                    and (not self.s.get('active') or kind in ('跳过剧情','确认跳过剧情','通关星级页继续至结算','确认通关结算')))
     def action(self,kind,word=None,xy=None):
         from pc_backend import FrameExpired,NavigationFrameExpired,TapNotSent,NavigationInputDeferred
         try:return self._action(kind,word,xy)
@@ -363,90 +379,41 @@ class Runner:
                 raise NavigationFrameExpired('普通界面点击尚未发送，画面已过期；重新取图核对当前页。') from exc
             raise
         except TapNotSent as exc:
-            if self._can_replan_ui(kind):
+            if getattr(self,'pc',None) and self._can_replan_ui(kind):
                 event('navigation_input_not_sent',action=kind,screen=self.s['screen'],
                       proof='TapNotSent_before_button_down',reason=str(exc),
                       input_sequence=getattr(self,'input_sequence',None))
                 raise NavigationInputDeferred(str(exc)) from exc
             raise
-    def _revalidate_top_right_skip(self,kind,word):
-        """Reobserve the page, then the live label immediately before dispatch.
-
-        Skip shares its location with chat. The ordinary five-second frame TTL
-        does not prove that a story control survived a scene transition. No
-        global motion/stability test, coordinate fallback or retry is used here.
-        """
-        tutorial=kind=='跳过已识别的免费地图教学'
-        expected='tutorial_skip' if tutorial else 'story'
-        pc=getattr(self,'pc',None)
-        binding=(pc.frame_window,pc.frame_viewport) if pc else None
-        original_size=self.frame.raw_size
-        def capture_checked(full=False):
-            self.ensure_game()
-            result=self.capture() if full else self._capture_pixels()
-            if pc and (pc.frame_window,pc.frame_viewport)!=binding:
-                from pc_backend import PcSafetyError
-                raise PcSafetyError('跳过发送前窗口或游戏视口几何发生变化；未发送输入。')
-            size=result.raw_size if full else result[1]
-            if size!=original_size:raise RuntimeError('跳过复核期间截图几何发生变化；未发送输入。')
-            return result
-        def blocked(reason):
-            self.s['reason']=reason+'；未发送跳过，不使用旧坐标，下一周期重新识别。'
-            event('skip_control_cancelled',action=kind,reason=reason)
-            self.save()
+    def _known_skip_control(self,kind,word):
+        """Recognize once, then verify volatile control pixels immediately before send."""
+        tutorial=kind in ('跳过已识别的免费地图教学','确认仅跳过教学')
+        confirmation=kind in ('确认跳过剧情','确认仅跳过教学')
+        expected=('tutorial_skip_confirm' if tutorial else 'skip_confirm') if confirmation else ('tutorial_skip' if tutorial else 'story')
+        if confirmation:
+            targets=[w for w in self.frame.words if w['text'] in ('确认','确定','確定','確認') and w['score']>=.90]
+            cancels=[w for w in self.frame.words if w['text']=='取消' and w['score']>=.90]
+            target=targets[0] if len(targets)==1 else None
+            controls=[target,*cancels] if target and len(cancels)==1 else []
+        else:
+            target=top_right_skip_control(self.frame.words,tutorial=tutorial)
+            controls=[target] if target else []
+        if (classify(self.frame)!=expected or not target or not controls or word is None
+            or any(target.get(k)!=word.get(k) for k in ('text','x','y','box'))):
+            self.s['reason']='当前帧没有对应的唯一跳过控件；继续观察，不用旧坐标。'
+            event('skip_control_cancelled',action=kind,reason=self.s['reason'])
             return None
-        original=top_right_skip_control(self.frame.words,tutorial=tutorial)
-        if (not original or word is None or classify(self.frame)!=expected
-            or abs(original['x']-word['x'])>1 or abs(original['y']-word['y'])>1):
-            return blocked('原跳过控件不完整或不唯一')
-        from pc_message_backend import CaptureUnavailable
-        try:fresh=capture_checked(full=True)
-        except CaptureUnavailable:return blocked('跳过复核暂未取得有效截图')
-        target=top_right_skip_control(fresh.words,tutorial=tutorial)
-        if (classify(fresh)!=expected or not target
-            or abs(target['x']-original['x'])>12 or abs(target['y']-original['y'])>8):
-            return blocked('跳过发送前页面或控件已经变化')
-        # Full-page business recognition above still outranks this local check.
-        # A small, independent current crop avoids another full OCR delay while
-        # rejecting a result/chat page that replaced Skip during recognition.
-        try:image,raw_size=capture_checked()
-        except CaptureUnavailable:return blocked('跳过即时复核暂未取得有效截图')
-        captured_at=time.time()
-        # Re-read only the full-frame detector's current text box, not the
-        # neighbouring arrow/chat icons that can corrupt a wide-strip OCR.
-        box=np.asarray(target['box'],dtype=float)
-        if box.shape!=(4,2) or not np.isfinite(box).all():return blocked('跳过控件几何不完整')
-        left,top=box.min(axis=0);right,bottom=box.max(axis=0)
-        if not ((1300 if tutorial else 1380)<=left<right<=1600 and 0<=top<bottom<=110
-                and 10<=right-left<=200 and 8<=bottom-top<=100):
-            return blocked('跳过文字框不在已核实区域')
-        x1=max(0,int(left)-2);x2=min(1600,int(right)+3)
-        y1=max(0,int(top)-2);y2=min(900,int(bottom)+3)
-        patch=fresh.image[y1:y2,x1:x2]
-        live=image[y1:y2,x1:x2]
-        # Compare only the label, not the animated background or full screen.
-        difference=np.abs(patch.astype(np.float32)-live.astype(np.float32))
-        if float(difference.mean())>12 or float(np.mean(difference.max(axis=2)>32))>.12:
-            return blocked('跳过文字所在控件像素已变化或被遮挡')
-        scores=[]
-        for scale in (1,2):
-            rows,_=self.ocr(cv2.resize(live,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
-            if not rows or len(rows)!=1 or len(rows[0])!=2:return blocked('即时复核未见唯一跳过文字')
-            text,score=rows[0]
-            if text.strip()!=target['text'].strip() or score<.98:return blocked('即时双读未确认同一高置信跳过控件')
-            scores.append(float(score))
-        current=dict(target,score=min(scores),source='current_skip_label_dual_read',verification_scores=scores)
-        if time.time()-captured_at>1:return blocked('跳过控件即时复核已经过期')
-        # Persist the independent last-moment observation before any input.
-        digest=hashlib.sha256(image.tobytes()).hexdigest()
-        evidence=ROOT/'evidence'/('skip-guard-'+str(time.time_ns())+'.png')
-        evidence.parent.mkdir(exist_ok=True)
-        evidence.write_bytes(cv2.imencode('.png',image)[1].tobytes())
-        event('skip_control_verified',action=kind,target=current,evidence=str(evidence.relative_to(ROOT)),image_sha256=digest,captured_at=captured_at,stage=(self.s.get('active') or self.ticket or {}).get('key'))
-        if time.time()-captured_at>1:return blocked('跳过复核留证耗时超过发送时限')
-        self.ensure_game()
-        if time.time()-captured_at>1:return blocked('跳过发送前复核已经过期')
-        return current,captured_at
+        from ui_control_guard import verify_live_controls
+        proof=verify_live_controls(self,controls,'skip-confirm' if confirmation else 'skip')
+        if proof is None:
+            event('skip_control_cancelled',action=kind,reason='发送前控件像素已变化；零输入重取图')
+            return None
+        self._live_skip_proof=proof
+        event('skip_control_verified',action=kind,target=target,evidence=proof['current_evidence'],
+              captured_at=proof['captured_at'],source='control_pixels_last_mile',proof=proof,
+              stage=(self.s.get('active') or self.ticket or {}).get('key'),
+              capture_timings=getattr(self.frame,'capture_timings',{}))
+        return target
     def _action(self,kind,word=None,xy=None):
         self.ensure_game()
         if time.time()-self.frame.at>5:
@@ -455,28 +422,32 @@ class Runner:
         blocker=capacity_blocker(w['text'] for w in self.frame.words)
         if blocker:raise TaskAttention(blocker.code,blocker.title,blocker.reason)
         if resource_warning(self.frame): raise RuntimeError('输入前触发资源消耗保护，已拒绝操作。')
-        guarded=kind in ('跳过剧情','跳过已识别的免费地图教学')
+        guarded=kind in ('跳过剧情','跳过已识别的免费地图教学','确认跳过剧情','确认仅跳过教学')
+        skip_started=time.perf_counter() if guarded else None
         if guarded:
             if xy is not None:raise RuntimeError('跳过操作必须提供本帧已识别控件，禁止固定坐标。')
-            # Save existing progress before the final quick observation, not
-            # after it: large history writes must not age the live target.
-            self.save()
-            verified=self._revalidate_top_right_skip(kind,word)
-            if verified is None:return False
-            word,verified_at=verified
+            word=self._known_skip_control(kind,word)
+            if word is None:return False
         x,y=xy if xy else (word['x'],word['y'])
         w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
         self.input_sequence=getattr(self,'input_sequence',0)+1
-        event('action',action=kind,xy=coords,stage=(self.s.get('active') or self.ticket or {}).get('key'))
+        from progression_evidence import story_effect
+        effect=story_effect(kind)
+        event('action',action=kind,xy=coords,stage=(self.s.get('active') or self.ticket or {}).get('key'),
+              **({'effect':effect} if effect else {}),
+              **({'skip_timings':dict(source='control_pixels_last_mile',
+                   recognized_to_intent_ms=round((time.perf_counter()-skip_started)*1000,2),
+                   capture_to_intent_ms=round((time.time()-self.frame.at)*1000,2),
+                   capture=getattr(self.frame,'capture_timings',{}))} if guarded else {}))
         self.s['last_action']=kind
-        if not guarded:self.save()
-        if guarded and time.time()-verified_at>1:
+        if not guarded and getattr(self,'_prepared_entry_action',None)!=kind:self.save()
+        if guarded and (not 0<=time.time()-self.frame.at<=5 or not 0<=time.time()-self._live_skip_proof['captured_at']<=.75):
             from pc_backend import FrameExpired
             event('skip_control_cancelled',action=kind,reason='发送前即时复核已过期')
-            raise FrameExpired('跳过控件即时复核已过期；未发送输入。')
+            raise FrameExpired('当前跳过观察已过期；未发送输入，重新读取当前帧。')
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
-        if guarded:self.save()
+        if guarded:self.save()  # Free skip intent/evidence was saved before input.
     def drag(self,why,start,end):
         self.ensure_game()
         if time.time()-self.frame.at>5:raise RuntimeError('观察画面已过期；已取消地图拖动。')
@@ -512,6 +483,31 @@ class Runner:
         self.ticket=None
         self.s.update(status=title,reason=reason,terminal=False,attention=dict(code=code,at=now(),evidence=self.evidence('ATTENTION')))
         self.save();raise TaskAttention(code,title,reason)
+    def observe_progress_evidence(self,scope,diagnostic,entry=None):
+        """Missing evidence is a live observation task, never a retry permit."""
+        reason=diagnostic.get('reason') or '正在核对当前推进所需的独立证据。'
+        context=entry if entry is not None else self.s.setdefault('evidence_observations',{})
+        slot='result_observation' if entry is not None else scope
+        previous=context.get(slot)
+        if not previous or previous.get('run_id')!=getattr(self,'run_id',None):
+            previous=dict(run_id=getattr(self,'run_id',None),first_seen_at=now(),observations=0,diagnostics=[])
+            context[slot]=previous
+        code=diagnostic.get('code',scope)
+        requirement=next((item for item in previous['diagnostics'] if item['code']==code),None)
+        new_requirement=requirement is None
+        if new_requirement:
+            requirement=dict(code=code,reason=reason,at=now(),observations=0,
+                evidence=self.evidence('progress-observation-'+scope+'-'+str(time.time_ns())))
+            previous['diagnostics'].append(requirement)
+        requirement.update(last_seen_at=now(),observations=requirement['observations']+1)
+        previous.update(last_observed_at=now(),observations=previous['observations']+1)
+        self.observation_wait=dict(code=scope,reason=reason,stage=(entry or {}).get('key',''))
+        self.s.update(status='正在核实推进证据',reason=reason+' 持续读取新帧，证据齐全后自动推进；不重放、不补记通关，无需反复点继续。')
+        if new_requirement or time.time()-previous.get('checkpoint_at',0)>=10:
+            previous['checkpoint_at']=time.time();self.save()
+        return True,.25
+    def observe_story_result(self,diagnostic):
+        return self.observe_progress_evidence('story_result',diagnostic,self.s['active'])
     def completed(self,proof):
         a=self.s.get('active')
         if not a: return
@@ -522,12 +518,12 @@ class Runner:
             event('completed',stage=key,proof=proof)
         self.s['last_stage']=key; self.s['last_cleared']=a; self.s['active']=None; self.save()
     def map_ticket(self,f):
-        e=mainline_episode(f); c=f.find(r'第\s*\d+\s*章',(80,95,340,160))
+        e=mainline_episode(f); chapter_fields,c=chapter_header(f)
         node,rows=selected_node(f)
         if not e or not c or not node: return None,rows,'无法可靠识别章节、编号或蓝色选中节点'
-        episode=e['episode']; chapter=int(re.search(r'\d+',c['text']).group())
-        d=dict(episode=episode,chapter=chapter,**node)
-        d['key']=f"E{episode}-C{chapter}-S{node['stage']}"; d['verified_epoch']=time.time()
+        episode=e['episode']
+        d=dict(episode=episode,**chapter_fields,**node)
+        d['key']=stage_key(d); d['verified_epoch']=time.time()
         if node['locked']:return d,rows,'锁定关卡'
         if node['completion']=='conflict':return d,rows,'当前通关标记不一致'
         if is_cleared(node):return d,rows,'已通关绿色勾' if node['clear_badge'] else '已通关关卡星级'
@@ -543,21 +539,29 @@ class Runner:
         from story_open_ack import register_open
         register_open(self,dispatch)
         self.s['reason']=f'已发送纯剧情节点 {key} 的入口消息；尚未确认游戏接受，通关仍须独立证据'
-        self.save()  # Durable intent BEFORE the only story-node click.
-        try:self.action('观看故事（仅一次）',target)
+        try:
+            if getattr(self,'run_id',None):
+                from entry_preparation import dispatch_first_entry
+                dispatch_first_entry(self,dispatch,'观看故事（仅一次）')
+            else:
+                self.save()  # Historical CLI; no new continuation capability.
+                self.action('观看故事（仅一次）',target)
         except TapNotSent as exc:
-            finish_dispatch(dispatch,'not_sent',str(exc))
+            if dispatch['status']=='reserved':finish_dispatch(dispatch,'not_sent',str(exc))
             self.archive_unresolved_active('观看故事按下前取消，确认未发送；原意图与发送结果完整保留')
             self.s.update(status='观看故事点击尚未发送',reason='鼠标接管时取消了点击；移出后点继续，重新核对当前节点。')
             self.save()
             raise TaskAttention('entry_not_sent',self.s['status'],self.s['reason']) from exc
-        finish_dispatch(dispatch,'sent');self.save();self.ticket=None
+        if dispatch['status']=='reserved':
+            finish_dispatch(dispatch,'sent');self.save()
+        self.ticket=None
         return True,3
     def title_matches(self,f):
         if not self.ticket: return False
         target=norm(self.ticket['name']); titlewords=[w for w in f.words if 1140<w['x']<1560 and 145<w['y']<195]
         return any(difflib.SequenceMatcher(None,target,norm(w['text'])).ratio()>.68 for w in titlewords)
     def step(self,f):
+        self.observation_wait=None
         mode=classify(f); self.s['screen']=mode
         if mode!=self.last_mode:
             self.mode_since=time.time(); self.unknown_gestures=0; self.last_mode=mode
@@ -568,6 +572,9 @@ class Runner:
         from free_notices import FreeNoticeController
         if not getattr(self,'free_notices',None):self.free_notices=FreeNoticeController(self)
         self.free_notices.observe_scene(mode,f)
+        from chat_recovery import ChatRecoveryController
+        if not getattr(self,'chat_recovery',None):self.chat_recovery=ChatRecoveryController(self)
+        self.chat_recovery.observe_scene(mode,f)
         self.s.update(status='正在推进主线',reason='已识别画面：'+scene_name(mode),terminal=False)
         if (ROOT/'STOP').exists(): return self.stop('用户停止','检测到 STOP 文件；未关闭游戏')
         if mode=='network_error':
@@ -581,12 +588,20 @@ class Runner:
             return self.attention(b.code,b.title,b.reason)
         if mode=='resource_stop':
             return self.attention('resource','体力/入场资源不足','请手动处理后点“处理后继续”；没有确认、兑换或使用资源。')
-        if mode=='defeat': return self.stop('强度不足卡关','识别到战斗失败/付费续战界面；不花费资源续战、不重新挑战，保留现场')
-        if mode=='chat_panel':return self.attention('chat_panel','聊天面板遮挡了当前流程','请手动关闭聊天面板后点“处理后继续”；不自动输入聊天、点穿结算或重新入场，原进度记录保留。')
-        if mode=='chapter_reward_pending':return self.attention('chapter_reward','免费章节奖励尚待核实','已检测到章节奖励通知，但完整当前读数不足；不把下一次新入场点击用于触发领奖。')
+        if mode=='defeat':
+            self.s.setdefault('stage_outcomes',[]).append(dict(outcome='defeat',at=now(),stage=(self.s.get('active') or {}).get('key'),evidence=self.evidence('explicit-defeat')))
+            return self.stop('强度不足卡关','当前画面明确显示战败；不复活、不重试，保留现场和原记录')
+        if mode=='chat_panel':return self.chat_recovery.step(f)
+        if mode=='chapter_reward_pending':
+            return self.observe_progress_evidence('chapter_reward',dict(code='current_reward_fields',
+                reason='已识别免费章节奖励通知，正在复核本帧星数、三档阈值和领取控件；核实前零输入，不用入场点击触发领奖。'))
         if mode=='unknown_dialog': return self.attention('dialog','弹窗等待处理','请手动处理当前弹窗后点“处理后继续”；未自动确认或购买。')
-        if mode in ('battle','victory','settlement') and (self.s.get('active') or {}).get('entry_kind')=='story_only':
-            return self.attention('story_result_external_progress','纯剧情记录与当前战斗不匹配','原入口仅为零体力观看故事；不能用旧剧情active认领后续战斗或结算。保留原记录，从当前画面新开始会完整归档旧链，不补记或重放旧关。')
+        from entry_preparation import continue_prepared_entry
+        prepared=continue_prepared_entry(self,mode)
+        if prepared is not None:return prepared
+        # A playback/dispatch history mismatch is diagnostic, not defeat and
+        # not a reason to block currently recognized free controls. The map's
+        # actual completion/unlock facts will settle the stage identity.
         if mode=='friendship_upgrade_notice':
             self.action('关闭免费英雄亲密度提升提示',friendship_upgrade_notice_close(f.words));return True,1
         if mode=='date_change_notice':
@@ -617,7 +632,12 @@ class Runner:
         if mode=='settlement':
             if not self.s.get('active') and not self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen':
                 return self.stop('安全暂停待修复','结算画面没有可对应的本次入场记录，停止而非猜测进度')
-            self.completed('独立识别：获得的道具 + 战斗结果 + 结算确认')
+            active=self.s.get('active')
+            if active and not active.get('settlement_observed'):
+                active['settlement_observed']=dict(at=now(),evidence=self.evidence('settlement-observed-'+active['key']))
+                self.save()
+            # Closing a result is navigation, not completion authority.
+            # Keep active until the current map proves clear / next unlock.
             self.ticket=None
             self.action('确认通关结算',battle_settlement_confirm(f.words)); return True,4
         if mode=='unlock_notice':
@@ -654,83 +674,55 @@ class Runner:
             control=mainline_map_control(f)
             d,rows,proof=self.map_ticket(f)
             if not d:
-                if age<20: self.save(); return True,4
-                return self.stop('安全暂停待修复',proof)
+                return self.observe_progress_evidence('map_identity',dict(code='map_identity',reason=proof))
             self.s['map_verification']=dict(target=d,proof=proof,rows=rows)
             a=self.s.get('active')
-            if a and a.get('entry_kind')=='story_only' and d['chapter']==a['chapter']+1:
-                from mainline_story_results import native_chapter_completion
-                trace=[json.loads(line) for line in (ROOT/'events.jsonl').read_text(encoding='utf8').splitlines() if line.strip()]
-                handoff=native_chapter_completion(self.s,d,rows,trace)
-                if handoff:
-                    a['native_chapter_handoff']=handoff
-                    self.completed('已记录剧情播放与免费故事奖励后，游戏原生自动切换下一章首个未锁节点；无换章/入场导航动作')
-                    a=None
-            if a and a.get('entry_kind')=='story_only':
-                oldrow=next((r for r in rows if r['stage']==a['stage']),None)
-                if oldrow is None:
-                    from entry_journal import attempt_digest
-                    dispatches=self.s.get('entry_dispatches',{}).get(a['key'],[])
-                    original=self.s.get('attempted',{}).get(a['key'])
-                    sent=[record for record in dispatches if record.get('status')=='sent']
-                    valid=(original and len(sent)==1 and all(record.get('status') in ('sent','not_sent') and record.get('original_sha256')==attempt_digest(original) for record in dispatches)
-                           and sent[0].get('entry',{}).get('key')==a['key'] and sent[0]['entry'].get('entry_kind')=='story_only')
-                    if valid:
-                        oldrow=clipped_story_completion(f,a,d,rows)
-                        if oldrow is None and a.get('playback_observed_at') and getattr(self,'run_id',None):
-                            from mainline_story_results import recorded_clipped_story_completion
-                            from story_open_ack import binding
-                            trace=[json.loads(line) for line in (ROOT/'events.jsonl').read_text(encoding='utf8').splitlines() if line.strip()]
-                            oldrow=recorded_clipped_story_completion(f,self.s,d,rows,trace,run_id=self.run_id,current_binding=binding(self),root=ROOT)
-                        if oldrow:
-                            a['map_clear_proof']=oldrow
-                            a['map_clear_evidence']=self.evidence('clipped-story-clear-'+a['key'])
-                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and is_cleared(oldrow):
-                    self.completed('返回地图后，纯剧情节点出现绿色已通关勾');a=None
-                else:
-                    from free_story_handoff import StoryHandoffController
-                    if not getattr(self,'story_handoff',None):self.story_handoff=StoryHandoffController(self)
-                    handoff=self.story_handoff.step(f)
-                    if handoff is not None:return handoff
-                if a and getattr(self,'story_open_ack',None):
-                    acknowledged=self.story_open_ack.step(f)
-                    if acknowledged is not None:return acknowledged
-                if a and time.time()-max(a['start_epoch'],a.get('story_reopen_epoch',0),a.get('free_story_handoff_epoch',0))<20:
-                    self.s['reason']='观看故事已发送一次，等待剧情播放或地图通关标记；不重复点击';self.save();return True,.7
-                elif a:
-                    return self.attention('story_result','剧情节点结果尚未确认',getattr(getattr(self,'story_open_ack',None),'last_rejection',None) or ('已观察到剧情播放，但当前结算/地图通关证据尚未完整核实；保留原播放与入场记录，不重放。' if a.get('playback_observed_at') else '入口消息已发送，但尚无游戏接受或明确通关证据；保留原记录，不据此认定已播放或已完成。'))
             if a:
-                oldrow=next((r for r in rows if r['stage']==a['stage']),None)
-                # New Start already archives old active in start_current_screen.
-                # A same-run entry may briefly render the old map before its
-                # story loads; never archive or resend that just-sent battle.
-                same=(d['episode'],d['chapter'],d['stage'])==(a['episode'],a['chapter'],a['stage'])
-                if same and not is_cleared(oldrow) and time.time()-a['start_epoch']<15:
-                    self.s['reason']='已发送本关入场，等待剧情/战斗接管；短暂旧地图不重发、不归档原入场'
-                    self.save();return True,.25
-                if d['episode']==a['episode'] and d['chapter']==a['chapter'] and is_cleared(oldrow):
-                    self.completed('返回地图后，原关卡出现绿色已通关勾')
-                else: return self.stop('安全暂停待修复','已入场但未确认通关；保留尝试记录，不重复开战')
-            if proof=='锁定关卡': return self.stop('安全暂停待修复','当前节点仍锁定；不入场、不回刷旧关')
+                from progression_facts import map_progress_fact
+                fact=map_progress_fact(f,a,d,rows)
+                if fact.completed:
+                    a['map_progress_fact']=fact.proof
+                    self.completed(fact.reason)
+                elif fact.forward_unlocked:
+                    # Forward permission is an actual map fact, not an inferred
+                    # win. Preserve the entire old active and all original sends.
+                    a['forward_map_fact']=fact.proof
+                    self.archive_unresolved_active(fact.reason)
+                else:
+                    # A sent click, elapsed deadline or missing switch is never
+                    # defeat. No automatic paid replay; simply keep observing.
+                    if a.get('entry_kind')=='story_only':
+                        # Retain the existing proven free reward-navigation
+                        # handoff; removing outcome log gates must not remove
+                        # the recovery that completes a first actual opening.
+                        from free_story_handoff import StoryHandoffController
+                        if not getattr(self,'story_handoff',None):self.story_handoff=StoryHandoffController(self)
+                        response=self.story_handoff.step(f)
+                        if response is not None:return response
+                        if getattr(self,'story_open_ack',None):
+                            response=self.story_open_ack.step(f)
+                            if response is not None:return response
+                    return self.observe_progress_evidence('stage_outcome',dict(code='stage_outcome',reason=fact.reason),a)
+            if proof=='锁定关卡': return self.observe_progress_evidence('stage_locked',dict(code='stage_locked',reason='当前节点仍锁定，继续观察解锁状态；未判战败，不点锁定关。'))
             if proof=='当前通关标记不一致':return self.attention('stage_rating','当前关通关标记不一致','已读到的星级和通关勾互相矛盾，未将此关判为完成；刷新当前关后继续。')
             if proof in CLEAR_PROOFS:
                 nextrow=next((r for r in rows if r['stage']==d['stage']+1),None)
                 if nextrow and is_unlocked(nextrow) and not is_cleared(nextrow):
                     self.ticket=None; self.action('避开已通关关卡，选择下一关',xy=(nextrow['x'],nextrow['y'])); return True,3
-                if nextrow and not is_unlocked(nextrow):return self.attention('locked_next','下一关尚未解锁','当前关通关标记已识别，但下一关仍带锁；不会点击锁定关卡。')
+                if nextrow and not is_unlocked(nextrow):return self.observe_progress_evidence('next_locked',dict(code='next_locked',reason='当前关已完成，下一关仍锁定；继续读取实际解锁状态，不判失败。'))
                 if d['stage']>=10:
                     self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
-                return self.stop('安全暂停待修复','当前已通关且无法可靠定位下一新关卡；未重复挑战')
+                return self.observe_progress_evidence('next_stage',dict(code='next_stage',reason='当前关已完成，正在识别下一未锁节点或地区入口；不重复已完成关。'))
+            if d.get('name_complete') is False:
+                return self.observe_progress_evidence('map_title',dict(code='map_title',reason='当前关名被OCR拆段，正在独立重读完整行；未导航或创建入场。'))
             from entry_journal import can_enter
             if not can_enter(self.s,d['key']):
-                if self.cfg.get('start_policy')=='current_screen':
-                    return self.attention('current_stage_unresolved','当前关未显示通关',f"{d['key']} 只有原入场/历史记录，当前画面没有明确通关标记；不当作已完成跳关、不点击后面的锁定关。处理当前关后可从所选新关继续，不回查旧关。")
-                return self.stop('安全暂停待修复',f"防重复入场：{d['key']} 已有尝试记录，不再次消耗体力")
+                return self.observe_progress_evidence('stage_history',dict(code='stage_history',reason=f"{d['key']} 当前没有完成或后继解锁证据；原点击只保留为发送记录，未判战败、不重复耗体力入场。"))
             if self.s.get('last_cleared') and self.cfg.get('start_policy')!='current_screen':
                 last=self.s['last_cleared']
-                if (d['episode'],d['chapter'],d['stage']) <= (last['episode'],last['chapter'],last['stage']):
+                if stage_order(d)<=stage_order(last):
                     return self.stop('安全暂停待修复','关卡编号未向前推进，拒绝倒退刷关')
-            self.ticket=d; self.ticket['proof']=proof; self.ticket['evidence']=self.evidence('preflight-'+d['key']); self.ticket['phase']='map'
+            self.ticket=d; self.ticket['progress_before']=dict(key=d['key'],next_locked=next((row.get('locked') for row in rows if row.get('stage')==d['stage']+1),None)); self.ticket['proof']=proof; self.ticket['evidence']=self.evidence('preflight-'+d['key']); self.ticket['phase']='map'
             self.s['verified']=self.ticket; self.s['last_stage']=d['key']
             event('preflight',target=self.ticket)
             if control and control['kind']=='story_only':return self.open_story_node(d,control['target'])
@@ -774,7 +766,7 @@ class Runner:
                     self.s['reason']='等待当前已拥有英雄配置步骤显示位置/完成证据；不返回取消选择、不发送入场';self.save();return True,.25
                 return self.attention('team_setup','当前英雄配置等待核实','未看到选位/已配置的完整证据，保留原选择链，不消耗英雄、不重复入场。')
             if self.s.get('active'):
-                return self.attention('team_entry_pending','原入场结果尚待核实','已记录一次入场请求但仍在队伍页；保留原active和全部发送记录，不自动归档、返回或重复开战。')
+                return self.observe_progress_evidence('entry_response',dict(code='entry_response',reason='当前仍在队伍页，入口发送不代表游戏接受或失败；继续观察，不重复消耗入场。'),self.s['active'])
             if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('队伍界面没有完整地图验证链'); return True,3
             if not self.title_matches(f): return self.stop('安全暂停待修复','开战前关卡名称不一致，拒绝入场')
@@ -783,7 +775,7 @@ class Runner:
                 if age<20:
                     self.s['reason']='入场数字受闪光/动画干扰，等待新截图重新严格读取；尚未入场、不猜测数值'
                     self.save(); return True,3
-                return self.stop('安全暂停待修复','连续20秒不能可靠读取入场消耗和剩余体力，拒绝猜测')
+                return self.observe_progress_evidence('entry_cost',dict(code='entry_cost',reason='入场费用暂未读全，继续读取当前字段；未发送、未判失败。'))
             match=re.search(r'(\d+)\s*/\s*(\d+)',cost['text']); required,available=map(int,match.groups())
             if required>100: return self.stop('安全暂停待修复','入场消耗读数异常')
             if available<required: return self.attention('resource','体力不足',f'当前体力 {available} 小于消耗 {required}；手动处理后继续，没有打开兑换框。')
@@ -795,30 +787,36 @@ class Runner:
             key=self.ticket['key']
             from entry_journal import can_enter,reserve_entry,finish_dispatch
             from pc_backend import TapNotSent
-            if not can_enter(self.s,key): return self.attention('entry_history','该关已有入场记录',f'{key} 已实际开战或发送结果不明；请选择未尝试的新关后继续。')
+            if not can_enter(self.s,key): return self.observe_progress_evidence('entry_history',dict(code='entry_history',reason=f'{key} 原发送记录保留，当前结果待观察；未判失败，不重复耗体力。'))
             a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time(),team_entry_mode=control['kind'],team_entry_proof=control['proof'])
             dispatch=reserve_entry(self.s,key,a);self.s['active']=a
             self.s['reason']=f"已验证新关 {key}，本次入场只消耗体力 {required}，绝不兑换"
-            self.save() # Durable intent BEFORE the one permitted entry input.
             entry=control['target'] if control['kind']=='single_task' else f.find('进行任务',(1300,750,1599,899))
-            try:self.action('进行任务（仅一次入场）',entry)
+            try:
+                if getattr(self,'run_id',None):
+                    from entry_preparation import dispatch_first_entry
+                    dispatch_first_entry(self,dispatch,'进行任务（仅一次入场）')
+                else:
+                    self.save() # Historical CLI does not acquire this lifecycle.
+                    self.action('进行任务（仅一次入场）',entry)
             except TapNotSent as exc:
-                finish_dispatch(dispatch,'not_sent',str(exc))
+                if dispatch['status']=='reserved':finish_dispatch(dispatch,'not_sent',str(exc))
                 self.archive_unresolved_active('开战按下前取消，确认未发送；原入场意图与发送结果完整保留')
                 self.s.update(status='开战点击尚未发送',reason='鼠标接管时取消了点击；移出后点继续，重新核对当前关再开战。')
                 self.save()
                 raise TaskAttention('entry_not_sent',self.s['status'],self.s['reason']) from exc
-            finish_dispatch(dispatch,'sent');self.save()
+            if dispatch['status']=='reserved':
+                finish_dispatch(dispatch,'sent');self.save()
             self.ticket=None; return True,5
         if mode=='battle':
             self.battle_seen=time.time()
             a=self.s.get('active')
             if a and time.time()-a['start_epoch']>self.cfg['max_battle_seconds']:
-                return self.stop('安全暂停待修复','单关超时，不能确定强度不足；保持现场，未重开关卡')
-            self.s['reason']=('新手战斗观察中，等待可核实的基础技能回合或剧情/结算；不点魂燃、神兽或重试' if self.cfg.get('new_account_tutorial') else '自动战斗中，等待剧情或通关结算；不点击技能、召唤或重试'); self.save(); return True,5
+                return self.observe_progress_evidence('battle_outcome',dict(code='battle_outcome',reason='战斗等待时间较长，但没有明确战败画面；继续观察实际结果，不重开。'),a)
+            self.s['reason']=('新手战斗观察中，等待可核实的基础技能回合或剧情/结算；不点魂燃、神兽或重试' if self.cfg.get('new_account_tutorial') else '自动战斗中，等待剧情或通关结算；不点击技能、召唤或重试'); self.save_observation(); return True,5
         if mode in ('loading','result_transition'):
-            if age>180: return self.stop('安全暂停待修复','加载或结果过渡超过3分钟，保留现场等待巡检')
-            self.save(); return True,4
+            if age>180: return self.observe_progress_evidence('scene_loading',dict(code='scene_loading',reason='仍在加载或结果过渡，尚无明确战败；继续观察。'))
+            self.save_observation(); return True,4
         # Full-screen CG: only during a recorded run, no popup labels, no battle HUD.
         a=self.s.get('active')
         if not self.cfg.get('new_account_tutorial',False) and a and age>=12 and time.time()-self.battle_seen>12 and time.time()-self.last_gesture>25 and self.unknown_gestures<2:

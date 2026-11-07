@@ -70,7 +70,7 @@ def tutorial_plan(f):
     altar_purpose=_unique(f,'请采集可用于英雄觉醒',(600,510,1000,535),.98)
     if not altar_purpose:
         purpose=_unique(f,'可用于英雄觉醒',(740,508,935,540),.98)
-        if purpose and purpose.get('source')=='current_altar_purpose_dual_read':altar_purpose=purpose
+        if purpose and purpose.get('source') in ('current_altar_purpose_field_read','current_altar_purpose_dual_read'):altar_purpose=purpose
     altar_runes=_unique(f,'的各种符文[!！]',(550,530,1050,580),.98)
     altar_close=_unique(f,'点击关闭',(650,600,950,710),.98)
     if all((altar_title,altar_open,altar_purpose,altar_runes,altar_close)):
@@ -411,7 +411,8 @@ def chapter_reward_pending(f):
     """Detection-only veto: a reward badge cannot fall through to stage entry."""
     import cv2,numpy as np
     header=_unique(f,r'(?:Episode\s*\d+|第\s*\d+\s*时代\s*Episode)',(50,0,430,90),.90)
-    chapter=_unique(f,r'第\s*\d+\s*章.+',(80,95,340,160),.85)
+    from map_identity import chapter_header
+    _,chapter=chapter_header(f)
     action=_unique(f,r'观看故事|观看剧情|准备战斗',(1250,780,1550,870),.90)
     layout=chapter_reward_layout(f)
     complete_layout=bool(layout and len(layout['labels'])==3)
@@ -499,7 +500,7 @@ def manual_combat_plan(f):
     if not hero:
         role=_unique(f,'护卫队长克劳乌',(260,770,560,835),.95)
         suffix=_unique(f,'克劳乌',(410,785,520,835),.98)
-        if role and suffix and suffix.get('source')=='current_fixed_actor_suffix_dual_read':
+        if role and suffix and suffix.get('source') in ('current_fixed_actor_suffix_field_read','current_fixed_actor_suffix_dual_read'):
             hero=role;actor_proof=[suffix]
     health=_unique(f,r'\d{1,6}/\d{1,6}',(300,835,580,865),.98)
     wave=_unique(f,r'[xX×※]?\s*[1-9]\s*/\s*[1-9]',(155,0,310,70),.75)
@@ -595,7 +596,7 @@ def plant_enemy_body(f,enemy):
 
 
 class TutorialController:
-    """Two-frame target check and durable once-only tutorial dispatch journal."""
+    """One current recognized target and durable once-only tutorial dispatch journal."""
     def __init__(self,runner):
         self.r=runner;self.pending=None
 
@@ -628,12 +629,8 @@ class TutorialController:
             ledger['page']=key;ledger['epoch']=ledger.get('epoch',0)+1
 
     def placement_confirmed(self,f):
-        """Two fresh independently matching placement observations, no input."""
-        if not owned_hero_placement_verified(f) or not 0<=time.time()-f.at<=3:
-            self.placement_pending=None;return False
-        previous=getattr(self,'placement_pending',None)
-        self.placement_pending=f.at
-        return previous is not None and 0<f.at-previous<=3
+        """One current positively identified placement; no extra matching frame."""
+        return bool(owned_hero_placement_verified(f) and 0<=time.time()-f.at<=3)
 
     def _setup_gate(self,plan):
         setup=self.r.s.get('team_config') or {}
@@ -766,10 +763,8 @@ class TutorialController:
             if (previous_wave and current_wave and previous_wave[2]==current_wave[2]
                 and int(current_wave[1])==int(previous_wave[1])+1):
                 stamp='wave-advance:'+plan['proof'][2]['text']
-                if self.pending is None or self.pending[0]!=stamp or f.at<=self.pending[2]:
-                    self.pending=(stamp,(target['x'],target['y']),f.at);return True,.25
                 if not 0<=time.time()-f.at<=3:self.pending=None;return True,.25
-                self._release_combat(ledger,'双独立新帧确认波次向前推进，当前基础技能回合重新就绪')
+                self._release_combat(ledger,'当前波次明确向前推进，当前基础技能回合重新就绪')
             elif previous.get('actor')!=plan['proof'][0]['text']:
                 self._release_combat(ledger,'独立核验下一位不同故事角色的基础技能回合')
             else:
@@ -781,8 +776,6 @@ class TutorialController:
                     and previous.get('proof') and len(previous['proof'])>=3
                     and [w['text'] for w in previous['proof'][:3]]==[w['text'] for w in plan['proof'][:3]]):
                     point=(1275,825)
-                    if self.pending is None or self.pending[0]!='basic-select:'+signature or f.at<=self.pending[2]:
-                        self.pending=('basic-select:'+signature,point,f.at);return True,.25
                     if not 0<=time.time()-f.at<=3:self.pending=None;return True,.25
                     follow=dict(status='reserved',at=time.time(),evidence=self.r.evidence('tutorial-first-basic-control'),
                                 target=dict(x=point[0],y=point[1],text='已核验发光第一基础技能按钮（非魂燃/神兽/其他技能）',score=1.),
@@ -798,9 +791,6 @@ class TutorialController:
                           and abs(previous['target']['y']-target['y'])>80)
                          or (previous['target']['y']>710 and 970<target['x']<1590 and 180<target['y']<=710))):
                     point=(target['x'],target['y'])
-                    if (self.pending is None or self.pending[0]!='body-correct:'+signature or f.at<=self.pending[2]
-                        or max(abs(a-b) for a,b in zip(point,self.pending[1]))>8):
-                        self.pending=('body-correct:'+signature,point,f.at);return True,.25
                     if not 0<=time.time()-f.at<=3:self.pending=None;return True,.25
                     correction=dict(status='reserved',at=time.time(),target=target,evidence=self.r.evidence('tutorial-plant-trunk-correction'),proof=plan['proof'])
                     previous['corrected_enemy_selection']=correction;self.r.save()
@@ -816,11 +806,8 @@ class TutorialController:
         if prior:
             if prior[-1]['status']=='sent' and time.time()-prior[-1]['at']<15:
                 self.r.s.update(reason='教学操作已发送，等待独立新页面；不重复点击。');self.r.save();return True,.25
-            return self.r.attention('tutorial_dispatch','教学步骤等待处理','同一教学动作已经发送或结果不明；保留证据，不重复发送。')
+            return self.r.observe_progress_evidence('tutorial_response',dict(code='tutorial_response',reason='当前教学尚未显示结果，继续读取已知控件；发送记录不代表完成或失败，不盲目重复。'))
         point=(target['x'],target['y'])
-        if (self.pending is None or self.pending[0]!=signature or f.at<=self.pending[2]
-                or max(abs(a-b) for a,b in zip(point,self.pending[1]))>8):
-            self.pending=(signature,point,f.at);return True,.25
         if time.time()-f.at>3:
             self.pending=None;return True,.25
         entry=dict(rule=plan['rule'],signature=signature,epoch=epoch,status='reserved',at=time.time(),

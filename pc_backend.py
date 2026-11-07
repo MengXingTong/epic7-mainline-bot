@@ -70,7 +70,10 @@ class PcBackend:
     def snapshot(self):
         if not self.read_only:self._stop_check()
         candidates=self.api.windows(self.cfg['game_exe'],self.cfg.get('window_title','第七史诗'))
-        if len(candidates)!=1:raise PcSafetyError('必须且只能找到一个已授权的桌面端游戏窗口。')
+        selected=self.cfg.get('selected_window')
+        if selected is not None:candidates=[s for s in candidates if s.identity()==selected]
+        elif self.window is not None:candidates=[s for s in candidates if s.identity()==self.window.identity()]
+        if len(candidates)!=1:raise PcSafetyError('必须找到唯一已授权的桌面端游戏窗口；不会切换到其他实例。')
         current=candidates[0]
         if current.width<640 or current.height<360:raise PcSafetyError('桌面端游戏客户区过小，请放大窗口。')
         ratio=current.width/current.height

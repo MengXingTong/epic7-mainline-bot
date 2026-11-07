@@ -23,7 +23,11 @@ def confirmation_source(state,event_path):
         or len(dispatches)!=1 or dispatches[0].get('status')!='sent' or dispatches[0].get('entry')!=original
         or dispatches[0].get('original_sha256')!=attempt_digest(original)
         or any(row.get('entry',{}).get('key')==key for row in state.get('unresolved_entries',[]))
-        or original.get('entry_kind')=='story_only' or original.get('team_entry_mode')!='single_task'
+        or original.get('entry_kind')=='story_only'
+        # AUTO changes battle handling, not the identity/count of this entry.
+        # Both modes were verified by the same guarded first-entry pipeline;
+        # disabled/unknown/hosted/repeat controls still have no permission.
+        or original.get('team_entry_mode') not in ('single_task','auto_on')
         or original.get('proof')!='未通关蓝色当前节点'
         or not 0<original.get('cost',0)<=100 or original.get('stamina_before',0)<original['cost']
         or any(original.get(k) for k in ('playback_observed_at','story_seen','victory_seen','battle_seen','defeat_seen'))):

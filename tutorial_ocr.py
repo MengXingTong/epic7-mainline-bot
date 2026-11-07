@@ -13,13 +13,13 @@ def strengthen_actor(f,ocr):
     if not any(re.fullmatch(r'\d+/\d+',w['text']) and w['score']>=.98 and 300<w['x']<580 and 835<w['y']<890 for w in f.words):return
     source=original[0];crop=f.image[785:835,280:540]
     readings=[]
-    for scale in (2,3):
+    for scale in (2,):
         rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC))
         exact=[(text,float(score)) for _,text,score in rows or [] if text.strip()==source['text']]
         if len(exact)!=1 or exact[0][1]<.98:
             return _strengthen_krau_suffix(f,ocr,source)
         readings.append(exact[0])
-    word=copy.deepcopy(source);word.update(score=min(score for text,score in readings),source='current_fixed_actor_roi_dual_read',verification_scores=[score for text,score in readings])
+    word=copy.deepcopy(source);word.update(score=min(score for text,score in readings),source='current_fixed_actor_roi_field_read',verification_scores=[score for text,score in readings])
     f.words.append(word)
 
 
@@ -28,7 +28,7 @@ def _strengthen_krau_suffix(f,ocr,source):
     # independently verify the full actual name in the fixed suffix field.
     if source['text']!='护卫队长克劳乌' or source['score']<.95:return
     crop=f.image[789:831,414:512];scores=[]
-    for scale in (1,2):
+    for scale in (1,):
         image=cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(image,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
@@ -37,13 +37,13 @@ def _strengthen_krau_suffix(f,ocr,source):
         scores.append(float(score))
     f.words.append(dict(text='克劳乌',score=min(scores),x=463,y=810,
                         box=[[414,789],[512,789],[512,831],[414,831]],
-                        source='current_fixed_actor_suffix_dual_read',verification_scores=scores))
+                        source='current_fixed_actor_suffix_field_read',verification_scores=scores))
 
 def strengthen_enemy_levels(f,ocr):
     """Read current green level badge only after enemy-shield/live-HP geometry.
 
     A merged level/remaining-HP OCR line is not a reason to lower thresholds or
-    borrow old enemy positions. Two crop reads must agree at >=.98.
+    borrow old enemy positions. A current crop read must score at >=.98.
     """
     import numpy as np
     if not any(re.search(r'\d+\s*/\s*\d+',w['text']) and 155<w['x']<310 and 0<w['y']<70 for w in f.words):return
@@ -64,28 +64,54 @@ def strengthen_enemy_levels(f,ocr):
         existing=[row for row in f.words if abs(row['x']-cx)<=12 and abs(row['y']-cy)<=12]
         if existing:continue
         crop=f.image[y:y+h,x:x+w];reads=[]
-        for scale in (2,3):
+        for scale in (2,):
             rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
             if not rows or len(rows)!=1 or len(rows[0])!=2:break
             text,score=rows[0]
             if not re.fullmatch(r'[1-9]\d?',text.strip()) or score<.98:break
             reads.append((text.strip(),float(score)))
-        if len(reads)!=2 or reads[0][0]!=reads[1][0]:continue
+        if len(reads)!=1:continue
         f.words.append(dict(text=reads[0][0],score=min(r[1] for r in reads),x=cx,y=cy,box=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]],
-                            source='current_enemy_level_badge_dual_read',verification_scores=[r[1] for r in reads]))
+                            source='current_enemy_level_badge_field_read',verification_scores=[r[1] for r in reads]))
+
+def _strengthen_chapter_reward_counter(f,ocr):
+    """Reread this frame's weak counter, never infer stars from tiers/history."""
+    candidates=[w for w in f.words if re.fullmatch(r'\d{1,3}/\d{1,3}',w['text'])
+                and 20<w['x']<110 and 750<w['y']<795]
+    if len(candidates)!=1:return
+    original=candidates[0]
+    if not .85<=original['score']<.98:return
+    count,total=map(int,original['text'].split('/'))
+    if not 0<=count<=total<=999 or total==0:return
+    rect=(25,750,110,795);x1,y1,x2,y2=rect;reads=[]
+    for scale in (2,):
+        crop=cv2.resize(f.image[y1:y2,x1:x2],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
+        rows,_=ocr(crop,use_det=False,use_cls=False)
+        if not rows or len(rows)!=1 or len(rows[0])!=2:return
+        text,score=rows[0]
+        if text.strip()!=original['text'] or score<.98:return
+        reads.append(float(score))
+    f.words.append(dict(text=original['text'],score=min(reads),x=(x1+x2)/2,y=(y1+y2)/2,
+        box=[[x1,y1],[x2,y1],[x2,y2],[x1,y2]],source='current_chapter_reward_counter_field_read',
+        verification_scores=reads,original_counter=copy.deepcopy(original)))
+
 
 def strengthen_chapter_reward_thresholds(f,ocr):
-    """Current fixed star-threshold fields, detector dual-read at original score."""
-    # Counter, exact map action and fixed label geometry are the anchors. A map
-    # title is not a prerequisite; no account/identity field is read or modified.
+    """Recheck the current weak counter before the existing tier field readers."""
+    # Reread a weak current counter BEFORE gating threshold OCR on it. A title
+    # is context only; neither a guessed counter nor old stars grant authority.
+    actions=[w for w in f.words if w['text'] in ('观看故事','观看剧情','准备战斗') and w['score']>=.98
+             and 1250<w['x']<1550 and 780<w['y']<870]
+    if len(actions)!=1:return
+    _strengthen_chapter_reward_counter(f,ocr)
     totals=[w for w in f.words if re.fullmatch(r'\d{1,3}/\d{1,3}',w['text']) and w['score']>=.98 and 20<w['x']<110 and 750<w['y']<795]
-    if len(totals)!=1 or not any(w['text'] in ('观看故事','观看剧情','准备战斗') and w['score']>=.98 and w['x']>1250 and w['y']>780 for w in f.words):return
+    if len(totals)!=1:return
     for rect in ((185,752,225,794),(305,755,342,790),(425,752,470,794)):
         x1,y1,x2,y2=rect
         existing=[w for w in f.words if x1<=w['x']<=x2 and y1<=w['y']<=y2 and re.fullmatch(r'[1-9]\d{0,2}',w['text']) and w['score']>=.98]
         if existing:continue
         reads=[]
-        for scale in (2,3):
+        for scale in (2,):
             crop=cv2.resize(f.image[y1:y2,x1:x2],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
             rows,_=ocr(crop,use_cls=False)
             valid=bool(rows and len(rows)==1 and len(rows[0])==3 and re.fullmatch(r'[1-9]\d{0,2}',rows[0][1].strip()) and rows[0][2]>=.98)
@@ -96,11 +122,11 @@ def strengthen_chapter_reward_thresholds(f,ocr):
                 text,score=direct[0]
                 if not re.fullmatch(r'[1-9]\d{0,2}',text.strip()) or score<.98:break
             reads.append((text.strip(),float(score)))
-        source='current_chapter_reward_threshold_dual_read'
-        if len(reads)!=2 or reads[0][0]!=reads[1][0]:
+        source='current_chapter_reward_threshold_field_read'
+        if len(reads)!=1:
             reads=_tight_chapter_threshold_reads(f,ocr,rect)
-            source='current_chapter_reward_threshold_tight_dual_read'
-        if len(reads)!=2 or reads[0][0]!=reads[1][0]:continue
+            source='current_chapter_reward_threshold_tight_field_read'
+        if len(reads)!=1:continue
         f.words.append(dict(text=reads[0][0],score=min(r[1] for r in reads),x=(x1+x2)/2,y=(y1+y2)/2,box=[[x1,y1],[x2,y1],[x2,y2],[x1,y2]],source=source,verification_scores=[r[1] for r in reads]))
 
 
@@ -119,7 +145,7 @@ def _tight_chapter_threshold_reads(f,ocr,rect):
     left=x1+min(x for x,y,w,h in glyphs)-2;right=x1+max(x+w for x,y,w,h in glyphs)+2
     top=y1+min(y for x,y,w,h in glyphs)-2;bottom=y1+max(y+h for x,y,w,h in glyphs)+2
     reads=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[top:bottom,left:right],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return []
@@ -129,20 +155,20 @@ def _tight_chapter_threshold_reads(f,ocr,rect):
     return reads
 
 def strengthen_orbis_unlock_notice(f,ocr):
-    """Known free-guide body field, two current recognizer reads; no fuzzy text."""
+    """Known free-guide body field, one current field read; no fuzzy text."""
     required=[('欧勒毕斯指南',(500,180,1100,280)),('可帮助继承者更好地了解《第七史诗》。',(400,495,1200,565)),('点击关闭',(650,600,950,710))]
     for text,(x1,y1,x2,y2) in required:
         words=[w for w in f.words if w['text']==text and w['score']>=.98 and x1<=w['x']<=x2 and y1<=w['y']<=y2]
         if len(words)!=1:return
     if any(w['text']=='欧勒毕斯指南功能已开启。' and w['score']>=.98 for w in f.words):return
     scores=[];crop=f.image[484:510,660:942]
-    for scale in (2,3):
+    for scale in (2,):
         rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!='欧勒毕斯指南功能已开启。' or score<.98:return
         scores.append(float(score))
-    f.words.append(dict(text='欧勒毕斯指南功能已开启。',score=min(scores),x=801,y=497,box=[[660,484],[942,484],[942,510],[660,510]],source='current_free_orbis_notice_dual_read',verification_scores=scores))
+    f.words.append(dict(text='欧勒毕斯指南功能已开启。',score=min(scores),x=801,y=497,box=[[660,484],[942,484],[942,510],[660,510]],source='current_free_orbis_notice_field_read',verification_scores=scores))
 
 def strengthen_summon_promo_title(f,ocr):
     """Same full current promo title twice; grants only independent ad close."""
@@ -152,14 +178,14 @@ def strengthen_summon_promo_title(f,ocr):
     original=[w for w in f.words if re.fullmatch(r'[\u4e00-\u9fff·]{2,20}',w['text']) and .8<=w['score']<.98 and 100<w['x']<750 and 150<w['y']<255]
     if len(original)!=1:return
     readings=[]
-    for scale in (1,2):
+    for scale in (1,):
         crop=cv2.resize(f.image[172:245,140:670],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!=original[0]['text'] or score<.98:return
         readings.append(float(score))
-    word=copy.deepcopy(original[0]);word.update(score=min(readings),source='current_summon_promo_title_dual_read',verification_scores=readings)
+    word=copy.deepcopy(original[0]);word.update(score=min(readings),source='current_summon_promo_title_field_read',verification_scores=readings)
     f.words.append(word)
 
 def strengthen_owned_unit_levels(f,ocr):
@@ -186,15 +212,15 @@ def strengthen_owned_unit_levels(f,ocr):
         x,y,w,h=candidates[0];cx,cy=x+w/2,y+h/2
         if any(abs(row['x']-cx)<=15 and abs(row['y']-cy)<=15 and row['score']>=.98 for row in f.words):continue
         reads=[]
-        for scale in (2,3):
+        for scale in (2,):
             crop=cv2.resize(f.image[y:y+h,x:x+w],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
             rows,_=ocr(crop,use_det=False,use_cls=False)
             if not rows or len(rows)!=1 or len(rows[0])!=2:break
             text,score=rows[0]
             if not re.fullmatch(r'[1-9]\d{0,2}',text.strip()) or score<.98:break
             reads.append((text.strip(),float(score)))
-        if len(reads)!=2 or reads[0][0]!=reads[1][0]:continue
-        f.words.append(dict(text=reads[0][0],score=min(t[1] for t in reads),x=cx,y=cy,box=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]],source='current_owned_unit_level_dual_read',verification_scores=[r[1] for r in reads]))
+        if len(reads)!=1:continue
+        f.words.append(dict(text=reads[0][0],score=min(t[1] for t in reads),x=cx,y=cy,box=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]],source='current_owned_unit_level_field_read',verification_scores=[r[1] for r in reads]))
 
 def strengthen_preparation_cost(f,ocr):
     """Discard glow suffix only with same-frame full numeric prefix + two reads."""
@@ -206,14 +232,14 @@ def strengthen_preparation_cost(f,ocr):
     if re.fullmatch(r'\d{1,6}\s*/\s*\d{1,6}',original['text']) and original['score']>=.98:return
     expected=re.match(r'^(\d{1,6}\s*/\s*\d{1,6})',original['text'])[1].replace(' ','')
     scores=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[811:852,1225:1313],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text.strip()!=expected or score<.98:return
         scores.append(float(score))
-    w=copy.deepcopy(original);w.update(text=expected,score=min(scores),source='current_preparation_cost_dual_read',verification_scores=scores)
+    w=copy.deepcopy(original);w.update(text=expected,score=min(scores),source='current_preparation_cost_field_read',verification_scores=scores)
     f.words.append(w)
 
 def strengthen_free_single_summon_label(f,ocr):
@@ -223,34 +249,34 @@ def strengthen_free_single_summon_label(f,ocr):
         if len([w for w in f.words if w['text']==text and w['score']>=.98 and x1<=w['x']<=x2 and y1<=w['y']<=y2])!=1:return
     if any(w['text']=='召唤1次' and w['score']>=.98 and 1100<w['x']<1250 and 790<w['y']<875 for w in f.words):return
     scores=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[808:851,1115:1220],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!='召唤1次' or score<.98:return
         scores.append(float(score))
-    f.words.append(dict(text='召唤1次',score=min(scores),x=1167.5,y=829.5,box=[[1115,808],[1220,808],[1220,851],[1115,851]],source='current_free_single_summon_label_dual_read',verification_scores=scores))
+    f.words.append(dict(text='召唤1次',score=min(scores),x=1167.5,y=829.5,box=[[1115,808],[1220,808],[1220,851],[1115,851]],source='current_free_single_summon_label_field_read',verification_scores=scores))
 
 def strengthen_wishlist_close(f,ocr):
     if len([w for w in f.words if w['text']=='添加愿望单' and w['score']>=.98 and 100<w['x']<420 and 40<w['y']<130])!=1:return
     if len([w for w in f.words if w['text']=='应用推荐列表' and w['score']>=.98 and 280<w['x']<620 and 735<w['y']<815])!=1:return
     if any(w['text']=='点击关闭' and w['score']>=.98 and 650<w['x']<950 and 830<w['y']<895 for w in f.words):return
     scores=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[852:885,775:858],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!='点击关闭' or score<.98:return
         scores.append(float(score))
-    f.words.append(dict(text='点击关闭',score=min(scores),x=816.5,y=868.5,box=[[775,852],[858,852],[858,885],[775,885]],source='current_wishlist_close_dual_read',verification_scores=scores))
+    f.words.append(dict(text='点击关闭',score=min(scores),x=816.5,y=868.5,box=[[775,852],[858,852],[858,885],[775,885]],source='current_wishlist_close_field_read',verification_scores=scores))
 
 def strengthen_wishlist_count(f,ocr):
     if not any(w['text']=='愿望单' and w['score']>=.98 and 780<w['x']<925 and 650<w['y']<735 for w in f.words):return
     if not any(w['text']=='可免费召唤1/1！' and w['score']>=.98 for w in f.words):return
     scores=[];value=None
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[680:715,927:996],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
@@ -258,7 +284,7 @@ def strengthen_wishlist_count(f,ocr):
         if not re.fullmatch(r'\d{1,3}/\d{1,3}',text) or score<.98:return
         if value is not None and text!=value:return
         value=text;scores.append(float(score))
-    f.words.append(dict(text=value,score=min(scores),x=961.5,y=697.5,box=[[927,680],[996,680],[996,715],[927,715]],source='current_wishlist_count_dual_read',verification_scores=scores))
+    f.words.append(dict(text=value,score=min(scores),x=961.5,y=697.5,box=[[927,680],[996,680],[996,715],[927,715]],source='current_wishlist_count_field_read',verification_scores=scores))
 
 
 def strengthen_spirit_altar_purpose(f,ocr):
@@ -270,14 +296,14 @@ def strengthen_spirit_altar_purpose(f,ocr):
     context=[w for w in f.words if re.fullmatch('请[采朵]集可用于英雄觉醒',w['text']) and w['score']>=.95 and 600<w['x']<1000 and 510<w['y']<535]
     if len(context)!=1:return
     scores=[]
-    for scale in (1,2):
+    for scale in (1,):
         crop=cv2.resize(f.image[508:538,747:930],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!='可用于英雄觉醒' or score<.98:return
         scores.append(float(score))
-    f.words.append(dict(text='可用于英雄觉醒',score=min(scores),x=838.5,y=523,box=[[747,508],[930,508],[930,538],[747,538]],source='current_altar_purpose_dual_read',verification_scores=scores))
+    f.words.append(dict(text='可用于英雄觉醒',score=min(scores),x=838.5,y=523,box=[[747,508],[930,508],[930,538],[747,538]],source='current_altar_purpose_field_read',verification_scores=scores))
 
 
 def strengthen_owned_card_level(f,ocr):
@@ -290,14 +316,14 @@ def strengthen_owned_card_level(f,ocr):
     originals=[w for w in f.words if re.fullmatch(r'[1-9]\d{0,2}[★☆*\s]*',w['text']) and w['score']>=.80 and 1240<w['x']<1400 and 345<w['y']<400]
     if len(originals)!=1:return
     expected=re.match(r'[1-9]\d{0,2}',originals[0]['text'])[0];reads=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[354:396,1243:1287],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!=expected or score<.98:return
         reads.append(float(score))
-    f.words.append(dict(text=expected,score=min(reads),x=1265,y=375,box=[[1243,354],[1287,354],[1287,396],[1243,396]],source='current_owned_card_level_dual_read',verification_scores=reads))
+    f.words.append(dict(text=expected,score=min(reads),x=1265,y=375,box=[[1243,354],[1287,354],[1287,396],[1243,396]],source='current_owned_card_level_field_read',verification_scores=reads))
 
 
 def strengthen_preparation_entry_label(f,ocr):
@@ -309,14 +335,14 @@ def strengthen_preparation_entry_label(f,ocr):
     source=[w for w in f.words if re.fullmatch(r'进行任务[+＋*✦\s]*',w['text']) and w['score']>=.85 and 1300<w['x']<1599 and 770<w['y']<899]
     if len(source)!=1:return
     reads=[]
-    for scale in (2,3):
+    for scale in (2,):
         crop=cv2.resize(f.image[806:855,1370:1490],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         rows,_=ocr(crop,use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0]
         if text!='进行任务' or score<.98:return
         reads.append(float(score))
-    f.words.append(dict(text='进行任务',score=min(reads),x=1430,y=830.5,box=[[1370,806],[1490,806],[1490,855],[1370,855]],source='current_preparation_single_entry_label_dual_read',verification_scores=reads))
+    f.words.append(dict(text='进行任务',score=min(reads),x=1430,y=830.5,box=[[1370,806],[1490,806],[1490,855],[1370,855]],source='current_preparation_single_entry_label_field_read',verification_scores=reads))
 
 
 def strengthen_map_stage_number(f,ocr):
@@ -340,7 +366,7 @@ def strengthen_map_stage_number(f,ocr):
     x1=max(0,int(left)-2);x2=min(1600,int(left)+round(height*.61*len(match[1])+2))
     y1=max(0,int(top)-2);y2=min(900,int(bottom)+3)
     crop=f.image[y1:y2,x1:x2];scores=[];dotted=False
-    for scale in (2,3):
+    for scale in (2,):
         rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
         if not rows or len(rows)!=1 or len(rows[0])!=2:return
         text,score=rows[0];read=re.fullmatch(r'([1-9]\d?)[.．]?',text.strip())
@@ -356,14 +382,14 @@ def strengthen_map_stage_number(f,ocr):
         rect=_tight_map_number_crop(f,(x1,y1,x2,y2),len(match[1]))
         if rect is None:return
         x1,y1,x2,y2=rect;crop=f.image[y1:y2,x1:x2];scores=[]
-        for scale in (2,3):
+        for scale in (2,):
             rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
             if not rows or len(rows)!=1 or len(rows[0])!=2:return
             text,score=rows[0]
             if text.strip()!=match[1] or not .98<=score<=1:return
             scores.append(float(score))
         crop_kind='current_numeric_glyphs'
-    word['stage_number_verification']=dict(source='current_map_numeric_prefix_dual_read',number=int(match[1]),scores=scores,
+    word['stage_number_verification']=dict(source='current_map_numeric_prefix_field_read',number=int(match[1]),scores=scores,
         captured_at=f.at,crop=[x1,y1,x2,y2],crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest(),crop_kind=crop_kind)
 
 
@@ -385,3 +411,63 @@ def _tight_map_number_crop(f,rect,digit_count):
             max(y1,y1+min(y for x,y,w,h in glyphs)-2),
             min(x2,x1+max(x+w for x,y,w,h in glyphs)+2),
             min(y2,y1+max(y+h for x,y,w,h in glyphs)+2))
+
+def strengthen_map_row_label(f,ocr):
+    """Read one selected map label as a complete field, not OCR box fragments.
+
+    Detector boxes may slightly overlap at punctuation. They locate a current
+    line crop, never authorize text. Two recognition-only reads must agree at
+    >= .98 on the entire numbered title. Raw OCR words/scores stay unchanged.
+    """
+    import hashlib,unicodedata,numpy as np
+    import runner
+    from mainline_map import row_markers
+    if runner.classify(f)!='map':return
+    numbered=re.compile(r'^\s*([1-9]\d?)\s*[.．、。]\s*(.+)')
+    anchors=[];hsv=cv2.cvtColor(f.image,cv2.COLOR_BGR2HSV)
+    for word in f.words:
+        match=numbered.fullmatch(word['text'])
+        if not match or word['score']<.85 or not (100<=word['x']<=650 and 190<=word['y']<=730):continue
+        marker=row_markers(f.image,hsv,round(word['y']))
+        if marker['cyan']>=.055 and not marker['clear_badge'] and not marker['locked']:anchors.append((word,match))
+    if len(anchors)!=1:return
+    word,match=anchors[0];box=np.asarray(word.get('box'),dtype=float)
+    if box.shape!=(4,2) or not np.isfinite(box).all():return
+    left,top=box.min(axis=0);right,bottom=box.max(axis=0);height=bottom-top
+    if not 15<=height<=60:return
+    parts=[word];candidates=[]
+    for other in f.words:
+        if other is word or not 100<=other['x']<=650 or abs(other['y']-word['y'])>height*.3:continue
+        points=np.asarray(other.get('box'),dtype=float)
+        if points.shape!=(4,2) or not np.isfinite(points).all():continue
+        x1,y1=points.min(axis=0);x2,y2=points.max(axis=0)
+        if x1<right-height*.5:continue
+        if numbered.fullmatch(other['text']):return
+        candidates.append((float(x1),float(x2),float(y1),float(y2),other))
+    candidates.sort(key=lambda item:item[0])
+    if candidates and candidates[0][0]-right<=height:
+        word['stage_label_pending']=True
+        word['stage_label_candidate_count']=1+len(candidates)
+    for index,(x1,x2,y1,y2,other) in enumerate(candidates):
+        if x1-right>height:break
+        # A near-identical detector alternative is not another part of a line.
+        if index+1<len(candidates) and candidates[index+1][0]<x2-height*.5:return
+        parts.append(other);right=max(right,x2);top=min(top,y1);bottom=max(bottom,y2)
+    if len(parts)<2:return
+    x1=max(0,int(left)-round(height*.2));x2=min(1600,int(right)+round(height*.2))
+    y1=max(0,int(top)-round(height*.17));y2=min(900,int(bottom)+round(height*.17))
+    crop=f.image[y1:y2,x1:x2];readings=[];scores=[]
+    normalize=lambda text:re.sub(r'\s+','',unicodedata.normalize('NFKC',text))
+    prefix=normalize(word['text'])
+    for scale in (1,):
+        rows,_=ocr(cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC),use_det=False,use_cls=False)
+        if not rows or len(rows)!=1 or len(rows[0])!=2:return
+        text,score=rows[0];text=normalize(text);read=numbered.fullmatch(text)
+        if not read or read[1]!=match[1] or not text.startswith(prefix) or len(text)<=len(prefix) or not .98<=score<=1:return
+        if any(normalize(part['text']) not in text for part in parts[1:] if part['score']>=.85):return
+        readings.append(text);scores.append(float(score))
+    word['stage_label_pending']=False
+    word['stage_label_verification']=dict(source='current_map_label_roi_field_read',number=int(match[1]),
+        text=readings[0],scores=scores,captured_at=f.at,crop=[x1,y1,x2,y2],
+        crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest(),anchor_text=word['text'],
+        components=[copy.deepcopy(part) for part in parts])

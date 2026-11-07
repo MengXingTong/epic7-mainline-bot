@@ -8,6 +8,10 @@ class Blocker:
     title:str
     reason:str
 
+class EntryPreparationDeferred(RuntimeError):
+    """A durable first-entry plan has not invoked any backend yet."""
+    pass
+
 class TaskAttention(RuntimeError):
     def __init__(self,code,title,reason):
         self.code=code;self.title=title;self.reason=reason

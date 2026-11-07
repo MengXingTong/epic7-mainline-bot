@@ -51,21 +51,19 @@ class TutorialCompletedNoticeTests(unittest.TestCase):
                 self.assertIsNone(tutorial_completed_notice_close(f.words));self.assertNotEqual(runner.classify(f),'tutorial_completed_notice')
         f=notice();f.words+=frame([('确认',1400,825)]).words
         self.assertIsNone(tutorial_completed_notice_close(f.words))
-    def test_two_independent_frames_close_durably_without_completing_or_retrying_stage(self):
+    def test_one_current_frame_closes_durably_without_completing_or_retrying_stage(self):
         r=self.make_runner();snapshots=[];r.action.side_effect=lambda *a:snapshots.append(copy.deepcopy(r.s));before=copy.deepcopy(r.s['active'])
         with patch('runner.event'),patch.object(runner,'ROOT',Path('synthetic-nonexistent')):
-            r.step(self.fresh(r,-.25));r.action.assert_not_called();r.step(self.fresh(r));r.action.assert_called_once()
+            r.step(self.fresh(r));r.action.assert_called_once()
         self.assertEqual(r.s['completed'],{});self.assertEqual(r.s['active'],before)
         self.assertEqual(snapshots[0]['free_notice_dismissals']['occurrences'][0]['messages'][0]['status'],'reserved')
-    def test_worker_runner_same_frame_is_not_a_second_disappearance_or_duplicate_evidence(self):
+        self.assertEqual(len(snapshots[0]['free_notice_dismissals']['occurrences'][0]['messages'][0]['observations']),1)
+    def test_one_known_departure_rearms_once_without_duplicate_evidence(self):
         r=self.make_runner();self.pair(r);f=self.fresh(r);r.free_notices.observe_scene('map',f)
-        count=r.evidence.call_count
-        r.free_notices.observe_scene('map',f)
-        self.assertEqual(r.evidence.call_count,count);self.assertIsNotNone(r.free_notices.active())
-        r.free_notices.observe_scene('map',self.fresh(r,.001));self.assertIsNone(r.free_notices.active())
+        count=r.evidence.call_count;r.free_notices.observe_scene('map',f)
+        self.assertEqual(r.evidence.call_count,count);self.assertIsNone(r.free_notices.active())
         record=r.s['free_notice_dismissals']['occurrences'][0]
-        self.assertEqual(len(record['disappearance_observations']),2)
-        self.assertLess(record['disappearance_observations'][0]['captured_at'],record['disappearance_observations'][1]['captured_at'])
+        self.assertEqual(len(record['disappearance_observations']),1)
 
     def test_same_notice_does_not_double_click_before_ack_window(self):
         r=self.make_runner();self.pair(r);self.pair(r);self.assertEqual(r.action.call_count,1)
@@ -74,12 +72,13 @@ class TutorialCompletedNoticeTests(unittest.TestCase):
         self.pair(r);self.assertEqual(r.action.call_count,2)
         self.assertEqual(len(r.s['free_notice_dismissals']['occurrences']),1)
         self.assertNotEqual(record['messages'][0]['id'],record['messages'][1]['id'])
-    def test_same_unresponsive_notice_stops_after_three_distinct_close_intents(self):
+    def test_unresponsive_notice_observes_without_calling_a_stage_failure(self):
         r=self.make_runner()
         for i in range(3):
             self.pair(r);r.free_notices.active()['messages'][-1]['finished_at']-=4
-        with self.assertRaises(TaskAttention):self.pair(r)
-        self.assertEqual(r.action.call_count,3)
+        self.pair(r);self.assertEqual(r.action.call_count,3)
+        self.assertNotIn('attention',r.s);self.assertEqual(r.s['completed'],{})
+        self.assertEqual(r.observation_wait['code'],'notice_response')
     def test_reappearing_same_notice_and_same_no_stage_context_closes_again(self):
         r=self.make_runner();r.s['active']=None;r.s['tutorial_completed_notice_closes']={'same-run:None':dict(status='sent',evidence='old.png')}
         old=copy.deepcopy(r.s['tutorial_completed_notice_closes']);self.pair(r);self.depart(r)
@@ -90,22 +89,22 @@ class TutorialCompletedNoticeTests(unittest.TestCase):
         r=self.make_runner()
         for i in range(5):self.pair(r);self.depart(r)
         self.assertEqual(r.action.call_count,5);self.assertEqual(len(r.s['free_notice_dismissals']['occurrences']),5)
-    def test_unknown_loading_and_single_absence_do_not_rearm(self):
+    def test_unknown_loading_do_not_rearm_but_one_known_map_observation_does(self):
         for scene in ('unknown','unknown_dialog','loading','result_transition','capacity_stop','resource_stop','defeat'):
             r=self.make_runner();self.pair(r);first=r.free_notices.active()['id'];self.depart(r,scene)
             self.assertEqual(r.free_notices.active()['id'],first);self.pair(r);r.action.assert_called_once()
-        r=self.make_runner();self.pair(r);r.free_notices.observe_scene('map',self.fresh(r));self.assertIsNotNone(r.free_notices.active())
+        r=self.make_runner();self.pair(r);r.free_notices.observe_scene('map',self.fresh(r));self.assertIsNone(r.free_notices.active())
     def test_modal_chrome_still_visible_is_not_a_disappearance(self):
         r=self.make_runner();self.pair(r)
         for offset in (-.25,0):
             f=self.fresh(r,offset);f.image[254:256,:]=180;f.image[644:646,:]=180
             self.assertTrue(notice_modal_band_visible(f.image));r.free_notices.observe_scene('map',f)
         self.assertIsNotNone(r.free_notices.active());self.pair(r);r.action.assert_called_once()
-    def test_target_moves_stale_reused_and_detached_frames_never_close(self):
+    def test_stale_detached_never_close_but_one_current_target_is_enough(self):
         r=self.make_runner();f=self.fresh(r,-4);r.free_notices.step(f);r.action.assert_not_called()
-        f=self.fresh(r,-.25);r.free_notices.step(f);r.free_notices.step(f);r.action.assert_not_called()
-        f=self.fresh(r);f.words[-1]['x']+=20;r.free_notices.step(f);r.action.assert_not_called()
         r.free_notices.step(notice());r.action.assert_not_called()
+        f=self.fresh(r);f.words[-1]['x']+=20;r.free_notices.step(f);r.action.assert_called_once()
+        r.free_notices.step(f);r.action.assert_called_once()
     def test_restart_preserves_active_occurrence_and_original_message_count(self):
         r=self.make_runner();self.pair(r);r.free_notices=FreeNoticeController(r);self.pair(r)
         r.action.assert_called_once();self.assertEqual(len(r.s['free_notice_dismissals']['occurrences']),1)

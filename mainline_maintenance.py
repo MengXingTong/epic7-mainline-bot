@@ -23,6 +23,28 @@ def display_failure_exit(proof,folder,root,status):
             and (str(root/'latest.png') in diagnostic or repr(str(root/'latest.png')) in diagnostic) and 'runner.py' in diagnostic)
 
 
+def settings_match(request,original,root,proof,folder):
+    """A routed run keeps its original request and audited effective history.
+
+    Only data_dir may differ, and only by the original worker's hash-bound
+    profile-resolution receipt. This is not permission to choose a new profile.
+    """
+    if request['settings']==original.get('settings'):return True
+    path=folder/'profile-resolution.json'
+    if not path.is_file() or proof.get('profile_resolution_sha256')!=digest(path):return False
+    receipt=read_json(path,{})
+    resolution=receipt.get('resolution') or {}
+    old=original.get('settings') or {}
+    if (receipt.get('run_id')!=original.get('run_id') or receipt.get('target')!=original.get('target')
+        or receipt.get('request_sha256')!=digest(folder/'request.json')
+        or receipt.get('history_mutated') is not False or resolution.get('history_mutated') is not False
+        or resolution.get('schema')!=1 or resolution.get('reason')!='selected_target_original_profile'
+        or not old.get('data_dir') or resolution.get('previous_data_dir')!=old['data_dir']
+        or receipt.get('resolved_data_dir')!=str(root) or resolution.get('resolved_data_dir')!=str(root)):
+        return False
+    return request['settings']==dict(old,data_dir=str(root))
+
+
 def validate_maintenance(request,root,state,*,before_activation=False):
     proof=request.get('mainline_maintenance')
     if not isinstance(proof,dict):raise ValueError('缺少原run维护来源；不保留外来active。')
@@ -31,7 +53,7 @@ def validate_maintenance(request,root,state,*,before_activation=False):
     status_path=folder/'status.json';status=read_json(status_path,{})
     command=read_json(folder/'control.json',{})
     if (request['settings'].get('task')!='mainline' or request['settings'].get('observe') is not False
-        or request['target'].get('client') not in ('mumu','pc') or request['settings']!=original.get('settings')
+        or request['target'].get('client') not in ('mumu','pc') or not settings_match(request,original,root,proof,folder)
         or request['target']!=original.get('target') or request.get('run_id')!=original.get('run_id')
         or request.get('home')!=original.get('home') or Path(original.get('run_dir','')).resolve()!=folder
         or Path(request['settings'].get('data_dir','')).resolve()!=root

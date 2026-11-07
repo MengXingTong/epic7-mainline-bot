@@ -67,10 +67,10 @@ class SummonReturnTests(unittest.TestCase):
         reference(self.root,current());(self.root/'control_templates'/'covenant-back.png').write_bytes(b'changed')
         self.assertIsNone(covenant_back(current()))
         (self.root/'control_templates'/'covenant-back.json').unlink();self.assertIsNone(covenant_back(current()))
-    def test_back_is_double_frame_persisted_once_and_never_changes_progress(self):
+    def test_back_uses_current_frame_persisted_once_and_preserves_progress(self):
         r,c=self.controller();before=copy.deepcopy(r.s);reserved=[]
         r.action.side_effect=lambda *a:reserved.append(copy.deepcopy(r.s))
-        f=current();c.step(f);c.step(f);r.action.assert_not_called()
+        f=current();c.step(f);c.step(f);r.action.assert_called_once()
         c.step(current());r.action.assert_called_once();self.assertEqual(r.action.call_args.args[1]['text'],'返回')
         self.assertEqual(reserved[0]['tutorial']['actions'][0]['return_navigation']['status'],'reserved')
         self.assertEqual(r.s['tutorial']['actions'][0]['return_navigation']['status'],'sent')
@@ -95,7 +95,7 @@ class SummonReturnTests(unittest.TestCase):
         self.assertEqual(r.s['tutorial']['actions'][0]['return_navigation']['status'],'reserved')
         r.action.reset_mock();r.action.side_effect=None;self.dispatch(TutorialController(r));r.action.assert_not_called()
     def test_expired_frame_does_not_dispatch(self):
-        r,c=self.controller();f=current();c.step(f);f=current();f.at=time.time()-10;c.step(f);r.action.assert_not_called()
+        r,c=self.controller();f=current();f.at=time.time()-10;c.step(f);r.action.assert_not_called()
 
 class SummonEpisodeTests(unittest.TestCase):
     def current(self):

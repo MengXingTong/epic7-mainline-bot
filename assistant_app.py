@@ -10,14 +10,18 @@ from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,
 from assistant_status import activity,scene_caption
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','电脑客户端':'pc'}
-TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater','买企鹅（实验性）':'penguin'}
+TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater','买企鹅（实验性）':'penguin','竞技场 NPC（实验性）':'arena'}
 
 class Assistant:
-    def __init__(self,root,ui_check=False,read_only=False):
-        self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings();self.targets=[];self.filtered=[]
+    def __init__(self,root,ui_check=False,read_only=False,*,home=HOME,slot_number=1,base_home=HOME):
+        self.home=Path(home).resolve();self.base_home=Path(base_home).resolve();self.slot_number=slot_number
+        self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings(self.home,inherit_legacy=slot_number==1);self.targets=[];self.filtered=[]
+        if slot_number!=1 and not self.settings.get('worker_python'):
+            primary=read_json(self.base_home/'settings.json',{})
+            self.settings['worker_python']=primary.get('worker_python','')
         self.scanning=False;self.last_badge=None;self.worker_warning='';self.status=tk.StringVar(value='尚未启动。选择客户端与任务后点开始推进。')
         self.process=None;self.run_dir=None;self.run_id=None;self.mode='idle';self.events=queue.Queue();self.photo=None;self.preview_stamp=None;self.started=None;self.last_heartbeat=time.monotonic();self.closing=False;self.pending_restart=None;self.gui_command_id=None
-        root.title('第七史诗 · 统一推进助手');root.configure(bg=BG)
+        root.title(f'第七史诗 · 统一推进助手 #{slot_number}');root.configure(bg=BG)
         from ctypes import wintypes
         area=wintypes.RECT();user=ctypes.WinDLL('user32',use_last_error=True)
         if user.SystemParametersInfoW(48,0,ctypes.byref(area),0):
@@ -60,7 +64,7 @@ class Assistant:
         content=tk.Frame(outer,bg=BG);content.pack(fill='both',expand=True,padx=20,pady=(16,12));outer=content
         tk.Label(outer,text='第七史诗 / 统一推进助手',bg=BG,fg=GREEN,font=('Segoe UI',9,'bold')).pack(anchor='w')
         tk.Label(outer,text='统一推进助手',bg=BG,fg=INK,font=('Microsoft YaHei UI',22,'bold')).pack(anchor='w',pady=(4,2))
-        tk.Label(outer,text='剧情 / 深渊 / 月光剧场 / 买企鹅 · 保留原始进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
+        tk.Label(outer,text=f'助手 #{slot_number} · 可多开；每个窗口选择不同客户端 · 保留原进度',bg=BG,fg=MUTED,font=('Microsoft YaHei UI',10)).pack(anchor='w',pady=(0,13))
         connection=self.card(outer)
         connection.columnconfigure(1,weight=1)
         self.client=tk.StringVar(value='自动识别')
@@ -68,9 +72,8 @@ class Assistant:
         self.instance=tk.StringVar(value='正在检测客户端…')
         self.client_box=self.combo(connection,'客户端',self.client,list(CLIENTS),0)
         self.refresh_button=self.button(connection,'刷新',self.scan,'#e8f0eb',INK);self.refresh_button.grid(row=0,column=2,padx=(8,0))
-        from assistant_portable import enabled
         self.import_button=None
-        if enabled():
+        if not self.read_only:
             self.import_button=self.button(connection,'使用原进度…',self.import_profile,'#e8f0eb',INK)
             self.import_button.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(7,0))
         self.target_box=self.combo(connection,'绑定实例',self.instance,[],1,columnspan=2)
@@ -80,6 +83,11 @@ class Assistant:
         self.penguin_label.grid(row=3,column=0,sticky='w',pady=4)
         self.penguin_box=ttk.Spinbox(connection,from_=1,to=999999,textvariable=self.penguin_quantity,width=12)
         self.penguin_box.grid(row=3,column=1,columnspan=2,sticky='ew',pady=4)
+        self.arena_count=tk.StringVar(value=str(self.settings.get('arena_count','')))
+        self.arena_label=tk.Label(connection,text='NPC 对战次数',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9))
+        self.arena_label.grid(row=3,column=0,sticky='w',pady=4)
+        self.arena_box=ttk.Spinbox(connection,from_=1,to=9999,textvariable=self.arena_count,width=12)
+        self.arena_box.grid(row=3,column=1,columnspan=2,sticky='ew',pady=4)
         self.client_box.bind('<<ComboboxSelected>>',lambda e:self.filter_targets())
         self.target_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
         self.task_box.bind('<<ComboboxSelected>>',lambda e:(self.update_note(),self.update_buttons()))
@@ -137,11 +145,15 @@ class Assistant:
         if not folder:return
         try:
             from assistant_portable import register_existing,save_settings
-            root,state=register_existing(folder)
+            root,state=register_existing(folder,self.home)
             self.settings.update(data_dir=str(root),portable_first_use=False)
+            from assistant_instances import history_key
+            try:chosen_key=history_key(self.selected_target())
+            except ValueError:chosen_key=None
+            self.settings['profile_choice']=dict(kind='explicit_import',target_key=chosen_key,data_dir=str(root))
             cfg=read_json(root/'config.json',{})
             self.settings['mumu'].update({k:cfg[k] for k in ('adb','serial','package') if k in cfg})
-            save_settings(self.settings);self.mode='idle'
+            save_settings(self.settings,self.home);self.mode='idle'
             self.status.set('已关联原进度 '+str(len(state['completed']))+' 关；任务未启动，原记录未修改。');self.update_note();self.update_buttons();self.scan()
         except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.update_buttons()
     def current_settings(self):
@@ -150,6 +162,9 @@ class Assistant:
         if value['task']=='penguin':
             from penguin_core import quantity
             value['penguin_quantity']=quantity(self.penguin_quantity.get())
+        if value['task']=='arena':
+            from arena_core import count
+            value['arena_count']=count(self.arena_count.get())
         return value
     def filter_targets(self):
         client=CLIENTS[self.client.get()]
@@ -160,22 +175,27 @@ class Assistant:
         else:self.instance.set('检测到多个目标，请手动选择')
         self.update_note()
     def update_note(self):
+        arena=TASKS[self.task.get()]=='arena'
+        if arena:self.arena_label.grid();self.arena_box.grid()
+        else:self.arena_label.grid_remove();self.arena_box.grid_remove()
         penguin=TASKS[self.task.get()]=='penguin'
         if penguin:self.penguin_label.grid();self.penguin_box.grid()
         else:self.penguin_label.grid_remove();self.penguin_box.grid_remove()
-        if hasattr(self,'run_policy'):self.run_policy.configure(text='按指定总只数购买 · 不超买、不补购资源' if penguin else '持续推进 · 不设次数上限')
-        if hasattr(self,'task_guard'):self.task_guard.configure(text='仅购买企鹅 · 不补购资源 · 未决扣费不重发' if penguin else '仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡')
-        if hasattr(self,'wins_caption'):self.wins_caption.configure(text='已购企鹅' if penguin else '本次观览' if TASKS[self.task.get()]=='theater' else '本次通关')
+        if hasattr(self,'run_policy'):self.run_policy.configure(text='按指定总只数购买 · 不超买、不补购资源' if penguin else '按指定次数完成 NPC 对战 · 独立结算计数' if arena else '持续推进 · 不设次数上限')
+        if hasattr(self,'task_guard'):self.task_guard.configure(text='仅购买企鹅 · 不补购资源 · 未决扣费不重发' if penguin else '仅 NPC 对战 · 不买挑战书 / 不复活 / 不重试战败' if arena else '仅普通深渊 · 不购买 / 不复活 / 不重试战败关卡')
+        if hasattr(self,'wins_caption'):self.wins_caption.configure(text='已购企鹅' if penguin else '已完成 / 目标' if arena else '本次观览' if TASKS[self.task.get()]=='theater' else '本次通关')
         try:target=self.selected_target();client=target['client']
         except ValueError:client=CLIENTS.get(self.client.get())
         if client=='mumu':
             text='MuMu 使用 ADB，不占电脑鼠标和焦点；模拟器内需保持游戏打开。'
             if TASKS[self.task.get()]=='abyss':text+=' MuMu深渊尚未实机验收，无法确认界面时停止。'
-        else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化；鼠标移入游戏时让行，移出后继续。'
+        else:text='PC后台消息：已实测无焦点导航与截图；整场后台推进、拖动/CG仍待验收。不支持最小化；鼠标仅悬停不暂停；实际按住鼠标/修饰键时让行，松开后重新取图。'
         if TASKS[self.task.get()]=='dimension':
             text+=' 次元探查仅完成部分导航验收，路线、抉择、招募与通关待实测；新界面留证后等待处理，不自动重打。'
         if TASKS[self.task.get()]=='theater':
             text+=' 月光剧场仅实验性 PC 后台：先手动打开剧场列表；每集仅允许明确的一张剧场门票，不购买。逐帧识别剧情翻页，战斗等待；剧目/集数或完成证据不完整则等待处理，整集与跨剧目尚未实机验收。'
+        if arena:
+            text+=' NPC竞技场为实验性模式：竞技场→新手竞技场→NPC对战；每把选择首位对手，费用仅1张现有挑战书，开启自动战斗后等待独立结算。未知/战败/资源不足停止；不购买、不重复未决入场。MuMu尚未实机验收。'
         if penguin:
             text+=' 买企鹅为实验性 PC 后台模式：填写总只数（不是购买次数），圣域→精灵之森→成长祭坛→企鹅巢穴；每批最多以本帧为准，尾批精确调数。仅购买企鹅；未决扣费不重发。已验收导航与数量弹窗，实际扣费/结果闭环待授权实测。'
         if not self.settings.get('data_dir'):
@@ -193,11 +213,11 @@ class Assistant:
         alive=bool(self.process and self.process.poll() is None)
         label='继续观察' if self.mode=='paused' and self.read_only else ('继续推进' if self.mode=='paused' else ('开始观察' if self.read_only else '开始推进'))
         if TASKS[self.task.get()]=='penguin' and not self.read_only:label='继续购买' if self.mode=='paused' else '开始购买'
-        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','waiting_scene':'等待画面稳定…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
+        if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','waiting_scene':'核对画面中…','waiting_evidence':'核实结果中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
         self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) else 'normal')
-        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input','waiting_scene') else 'disabled')
+        self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input','waiting_scene','waiting_evidence') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
     def update_activity(self):
@@ -209,7 +229,7 @@ class Assistant:
             if not self.warning_label.winfo_manager():self.warning_label.pack(fill='x',padx=12,pady=(0,5),before=self.activity_progress)
         elif self.warning_label.winfo_manager():self.warning_label.pack_forget()
         self.activity_detail.configure(text=self.status.get().replace('\n',' ')[:150],fg=view.color if self.mode in ('blocked','attention') else INK)
-        self.root.title(view.title.split(' · ')[0]+' | 第七史诗 · 统一推进助手')
+        self.root.title(view.title.split(' · ')[0]+f' | 第七史诗 · 统一推进助手 #{self.slot_number}')
         if view!=self.last_badge:
             self.activity_progress.stop()
             self.activity_progress.configure(mode='indeterminate' if view.moving else 'determinate')
@@ -220,6 +240,7 @@ class Assistant:
             age=int(time.monotonic()-self.last_heartbeat)
             text=('工作进程已暂停，等待手动处理' if self.mode in ('paused','attention') else f'最近状态更新：{age} 秒前')+'  |  本次用时 '+self.elapsed.get()
             if self.mode=='waiting_input':text='输入空闲后自动继续，不需要重新开始  |  本次用时 '+self.elapsed.get()
+            if self.mode=='waiting_evidence':text='持续读取新画面，证据齐全后自动推进，无需反复点继续  |  本次用时 '+self.elapsed.get()
             if self.mode=='waiting_scene':text='画面稳定后自动判断，不需要重新开始  |  本次用时 '+self.elapsed.get()
             elif age>15 and self.mode not in ('paused','attention'):text+='  · 仍在等待响应，不代表已卡死'
         else:text='任务没有运行。点击开始才会启动；说明文字不代表任务已开始。'
@@ -229,6 +250,7 @@ class Assistant:
         for widget in (self.client_box,self.target_box,self.task_box):widget.configure(state='disabled' if locked else 'readonly')
         self.refresh_button.configure(state='disabled' if locked else 'normal')
         self.penguin_box.configure(state='disabled' if locked else 'normal')
+        self.arena_box.configure(state='disabled' if locked else 'normal')
         if self.import_button:self.import_button.configure(state='disabled' if locked else 'normal')
     def initial_scan(self):
         # A failed explicit resume must remain visible, never become idle.
@@ -236,8 +258,8 @@ class Assistant:
     def scan(self):
         if self.scanning or (self.process and self.process.poll() is None):return
         self.scanning=True;self.update_buttons();self.refresh_button.configure(state='disabled')
-        self.status.set('正在检测本机客户端，任务尚未启动…');HOME.mkdir(parents=True,exist_ok=True)
-        settings_path=HOME/'discovery-settings.json';atomic_json(settings_path,self.settings)
+        self.status.set('正在检测本机客户端，任务尚未启动…');self.home.mkdir(parents=True,exist_ok=True)
+        settings_path=self.home/'discovery-settings.json';atomic_json(settings_path,self.settings)
         def work():
             try:
                 py=self.settings.get('worker_python','')
@@ -253,21 +275,26 @@ class Assistant:
             else:self.status.set('当前任务仍在运行；先暂停或停止后再切换。')
             return
         try:
-            settings=self.current_settings();target=self.selected_target();validate_run(settings,target,allow_reconcile=True)
+            settings=self.current_settings();target=self.selected_target()
+            from assistant_instances import resolve_target_profile
+            settings,profile_resolution=resolve_target_profile(settings,target,self.base_home)
+            validate_run(settings,target,allow_reconcile=True,home=self.home)
             py=settings.get('worker_python','')
             if not Path(py).is_file():raise ValueError('工作运行库不存在，停止启动。')
             from assistant_portable import save_settings
-            self.settings=settings;save_settings(settings)
-            self.run_id=uuid.uuid4().hex;self.run_dir=HOME/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
-            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(HOME),'settings':settings,'target':target,'user_selected_profile':not self.read_only,'requested_at':time.time()}
+            self.settings=settings;save_settings(settings,self.home)
+            self.run_id=uuid.uuid4().hex;self.run_dir=self.home/'runs'/self.run_id;self.run_dir.mkdir(parents=True)
+            request={'run_id':self.run_id,'run_dir':str(self.run_dir),'home':str(self.home),'instance_base':str(self.base_home),'instance_number':self.slot_number,'settings':settings,'target':target,'user_selected_profile':not self.read_only,'requested_at':time.time()}
+            if profile_resolution:request['profile_resolution']=profile_resolution
             atomic_json(self.run_dir/'request.json',request);self.command('run')
             self.launch_worker(request)
         except Exception as exc:self.mode='blocked';self.status.set(error_text(exc));self.log(str(exc));self.update_buttons()
     def launch_worker(self,request):
         py=request['settings']['worker_python']
         request_path=self.run_dir/('mainline-maintenance-request.json' if request.get('mainline_maintenance') else 'request.json')
-        self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(request_path)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),creationflags=subprocess.CREATE_NO_WINDOW)
-        atomic_json(HOME/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
+        env=os.environ.copy();env['EPIC7_ASSISTANT_HOME']=str(self.home);env['EPIC7_ASSISTANT_BASE']=str(self.base_home)
+        self.process=subprocess.Popen([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--request',str(request_path)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',bufsize=1,cwd=str(CODE_ROOT),env=env,creationflags=subprocess.CREATE_NO_WINDOW)
+        atomic_json(self.home/'active-run.json',{'run_id':self.run_id,'run_dir':str(self.run_dir),'worker_pid':self.process.pid})
         self.worker_warning='';self.mode='starting';self.started=time.monotonic();self.last_heartbeat=time.monotonic();self.lock_choices(True);self.status.set('正在连接并核对所选客户端，尚未进入关卡。');self.preview_stamp=None;self.update_buttons()
         child=self.process
         def reader():
@@ -276,6 +303,9 @@ class Assistant:
                     log.write(line);log.flush()
                     try:self.events.put(('worker',json.loads(line)))
                     except ValueError:self.events.put(('log',line.strip()))
+            # EOF can precede OS process exit. Reap first so the exit event
+            # cannot leave a terminal UI latched as 'waiting for process'.
+            child.wait()
             self.events.put(('exit',child.pid))
         threading.Thread(target=reader,daemon=True).start()
     def resume_existing(self,run_id):
@@ -284,7 +314,7 @@ class Assistant:
             if self.ui_check or self.read_only or (self.process and self.process.poll() is None):
                 raise ValueError('当前界面不能执行原run维护重载。')
             from assistant_config import load_theater_resume_request
-            request=load_theater_resume_request(run_id)
+            request=load_theater_resume_request(run_id,self.home)
             if not Path(request['settings'].get('worker_python','')).is_file():
                 raise ValueError('原工作运行库不存在；不重载、不改控制命令。')
             self.settings=dict(request['settings'])
@@ -305,13 +335,23 @@ class Assistant:
         if self.process and self.process.poll() is None:self.command('pause');self.mode='pausing';self.status.set('正在安全暂停；不清除本次上下文。');self.update_buttons()
     def stop(self):
         if self.process and self.process.poll() is None:self.command('stop');self.mode='stopping';self.status.set('正在停止输入，保留全部进度…');self.update_buttons()
+    def worker_exited(self,pid):
+        """Finalize only an observed OS exit, not stdout EOF or a terminal label."""
+        child=self.process
+        if child is None or child.pid!=pid or child.poll() is None:return False
+        self.process=None
+        self.lock_choices(False)
+        if self.mode not in ('done','blocked','stopped'):
+            self.mode='blocked';self.status.set('工作进程已退出，未自动重启。')
+        self.update_buttons()
+        return True
     def pump(self):
         try:
             for _ in range(50):
                 kind,data=self.events.get_nowait()
                 if kind=='targets':
                     self.scanning=False;self.refresh_button.configure(state='normal');self.targets=data['targets'];self.settings['mumu']=data.get('mumu',self.settings.get('mumu',{}));self.filter_targets()
-                    self.mode='idle';self.status.set('已发现 '+str(len(self.targets))+' 个客户端。任务尚未启动。');self.update_buttons()
+                    self.mode='idle';self.status.set('已发现 '+str(len(self.targets))+' 个客户端。任务尚未启动。'+('\n'+'；'.join(data['warnings']) if data.get('warnings') else ''));self.update_buttons()
                 elif kind=='scan_error':
                     self.scanning=False;self.refresh_button.configure(state='normal');self.mode='blocked';self.status.set(data);self.log(data);self.update_buttons()
                 elif kind in ('error','log'):self.log(data);self.status.set(data) if kind=='error' else None
@@ -320,7 +360,7 @@ class Assistant:
                         if data.get('run_id')!=self.run_id:continue
                         self.settings.update(data_dir=data['data_dir'],portable_first_use=False)
                         from assistant_portable import save_settings
-                        save_settings(self.settings);self.update_note()
+                        save_settings(self.settings,self.home);self.update_note()
                     elif data.get('kind')=='status':
                         if data.get('run_id')!=self.run_id:continue
                         incoming=data['mode']
@@ -328,17 +368,17 @@ class Assistant:
                         if self.mode=='pausing' and incoming not in ('paused','stopped','done','blocked'):continue
                         self.mode=incoming;self.worker_warning=data.get('warning','');self.status.set(data['status']);self.scene.set(scene_caption(data));self.wins.set(str(data.get('wins',0)));self.last_heartbeat=time.monotonic();self.update_buttons()
                     elif data.get('kind')=='log':self.log(data['text'])
-                elif kind=='exit' and self.process and data==self.process.pid:
-                    self.lock_choices(False)
-                    if self.mode not in ('done','blocked','stopped'):self.mode='blocked';self.status.set('工作进程已退出，未自动重启。')
-                    self.update_buttons()
+                elif kind=='exit':self.worker_exited(data)
         except queue.Empty:pass
+        # Polling is a fallback for a delayed/lost reader event; do not rely on
+        # a one-shot update_buttons call racing interpreter teardown.
+        if self.process is not None:self.worker_exited(self.process.pid)
         try:
-            command=read_json(HOME/'gui-command.json',{})
+            command=read_json(self.home/'gui-command.json',{})
             if command.get('command_id') and command['command_id']!=self.gui_command_id:
                 self.gui_command_id=command['command_id']
                 if command.get('expected_run_id')==self.run_id and command.get('task') in TASKS.values() and command.get('action')=='restart':
-                    if command['task']=='penguin':raise ValueError('买企鹅不能通过维护重启重复旧订单；请停止后在界面确认总只数，再明确开始。')
+                    if command['task'] in ('penguin','arena'):raise ValueError('指定数量/次数的任务不能通过维护重启重复旧目标；请停止后在界面确认本次目标，再明确开始。')
                     self.pending_restart=command['task']
                     if self.process and self.process.poll() is None:self.stop()
             if self.pending_restart and not self.closing and (self.process is None or self.process.poll() is not None):
@@ -369,29 +409,35 @@ class Assistant:
 
 
 def main():
-    ap=ChineseArgumentParser();ap.add_argument('--resume-run');ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater','penguin'));ap.add_argument('--penguin-quantity');args=ap.parse_args()
-    if args.resume_run and (args.autostart or args.ui_check or args.ui_exercise or args.task or args.client or args.penguin_quantity is not None):
+    ap=ChineseArgumentParser();ap.add_argument('--instance',type=int);ap.add_argument('--resume-run');ap.add_argument('--autostart',action='store_true');ap.add_argument('--ui-check',action='store_true');ap.add_argument('--ui-exercise',action='store_true');ap.add_argument('--client',choices=('auto','mumu','pc'));ap.add_argument('--task',choices=('mainline','abyss','saint_3_7','dimension','theater','penguin','arena'));ap.add_argument('--penguin-quantity');ap.add_argument('--arena-count');args=ap.parse_args()
+    if args.resume_run and (args.autostart or args.ui_check or args.ui_exercise or args.task or args.client or args.penguin_quantity is not None or args.arena_count is not None):
         ap.error('--resume-run不能与新开始、界面测试或改选目标组合。')
-    locks=[]
+    from assistant_instances import reserve_window,resume_slot,slot_home
+    number=args.instance
+    if number is not None:slot_home(HOME,number)
+    if args.resume_run:
+        original=resume_slot(HOME,args.resume_run)
+        if number is not None and number!=original:ap.error('原run不属于所指定的助手编号。')
+        number=original
+    lease=None
     if not args.ui_check:
-        kernel=ctypes.WinDLL('kernel32',use_last_error=True);kernel.CreateMutexW.argtypes=[ctypes.c_void_p,ctypes.c_bool,ctypes.c_wchar_p];kernel.CreateMutexW.restype=ctypes.c_void_p
-        for name in ('Local\\Epic7UnifiedAssistant','Local\\EpicSevenAbyssPilot.Panel'):
-            handle=kernel.CreateMutexW(None,False,name)
-            if not handle:raise ctypes.WinError(ctypes.get_last_error())
-            if ctypes.get_last_error()==183:
-                ctypes.windll.user32.MessageBoxW(None,'助手已经在运行。请在任务栏找到“第七史诗 · 统一推进助手”窗口。\n请先在原助手里暂停或停止任务，再关闭并重新打开。','第七史诗 · 统一推进助手',0x40)
-                return
-            locks.append(handle)
-    root=tk.Tk();app=Assistant(root,args.ui_check,read_only=args.ui_exercise)
+        lease=reserve_window(HOME,number)
+        number=lease.number
+    else:number=number or 1
+    home=slot_home(HOME,number)
+    root=tk.Tk();app=Assistant(root,args.ui_check,read_only=args.ui_exercise,home=home,slot_number=number,base_home=HOME)
     if args.client:app.client.set(next(k for k,v in CLIENTS.items() if v==args.client))
     if args.task:app.task.set(next(k for k,v in TASKS.items() if v==args.task))
     if args.penguin_quantity is not None:app.penguin_quantity.set(args.penguin_quantity)
+    if args.arena_count is not None:app.arena_count.set(args.arena_count)
     app.update_note();app.update_buttons()
     if args.resume_run:root.after(0,lambda:app.resume_existing(args.resume_run))
     if args.autostart and not args.ui_check and not args.ui_exercise:
         deadline=time.monotonic()+90
         def start_selected_once():
             if app.process is not None:return
+            if TASKS[app.task.get()]=='arena' and args.arena_count is None:
+                app.mode='blocked';app.status.set('自动开始竞技场必须显式提供本次 --arena-count，不能复用旧次数。');app.update_buttons();return
             if TASKS[app.task.get()]=='penguin' and args.penguin_quantity is None:
                 app.mode='blocked';app.status.set('自动开始买企鹅必须显式提供本次 --penguin-quantity，不能复用旧数量。');app.update_buttons();return
             if app.scanning or not app.filtered:
@@ -414,9 +460,9 @@ def main():
             elif phase[0]==3 and app.mode=='observe':
                 app.stop();phase[0]=4
             elif phase[0]==4 and app.mode=='stopped' and app.process.poll() is not None:
-                atomic_json(HOME/'ui-exercise.json',{'passed':True,'run_id':app.run_id,'sequence':['observe','pause','resume_observe','stop'],'no_input_mode':True});return
+                atomic_json(home/'ui-exercise.json',{'passed':True,'run_id':app.run_id,'sequence':['observe','pause','resume_observe','stop'],'no_input_mode':True});return
             if time.monotonic()>deadline:
-                app.stop();atomic_json(HOME/'ui-exercise.json',{'passed':False,'phase':phase[0],'status':app.status.get()});return
+                app.stop();atomic_json(home/'ui-exercise.json',{'passed':False,'phase':phase[0],'status':app.status.get()});return
             root.after(300,exercise)
         root.after(500,exercise)
     if args.ui_check:
@@ -424,7 +470,9 @@ def main():
         image=Image.new('RGB',(294,165),'#e8f4ec');app.photo=ImageTk.PhotoImage(image);app.preview.configure(image=app.photo,text='',height=165)
         root.update_idletasks();root.update()
         result={'width':root.winfo_width(),'height':root.winfo_height(),'workarea':app.workarea,'client_bounds':[root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height()],'scroll_region':app.body_canvas.cget('scrollregion'),'footer_bottom':app.stop_button.winfo_rooty()+app.stop_button.winfo_height(),'controls_visible':app.stop_button.winfo_ismapped(),'account_check_required':False,'observation_switch_present':False,'foreground_selector_present':hasattr(app,'input_box'),'count_limit_present':hasattr(app,'limit_box'),'continuous_run':True,'direct_start':not app.read_only,'client_modes':list(CLIENTS.values()),'tasks':list(TASKS.values())}
-        atomic_json(HOME/'ui-check.json',result);root.after(500,root.destroy)
-    root.mainloop()
+        atomic_json(home/'ui-check.json',result);root.after(500,root.destroy)
+    try:root.mainloop()
+    finally:
+        if lease:lease.close()
 
 if __name__=='__main__':main()

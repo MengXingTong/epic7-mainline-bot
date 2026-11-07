@@ -9,6 +9,14 @@ import sys
 
 
 SCENE_NAMES = {
+    'arena_unknown': '竞技场加载或未知画面（零输入）',
+    'arena_lobby': '大厅 · 前往竞技场',
+    'arena_hub': '竞技场 · 新手竞技场入口',
+    'arena_tab': '新手竞技场 · NPC对战页签',
+    'arena_npc': 'NPC对手列表 · 首位对手',
+    'arena_team': 'NPC对战 · 队伍与挑战书核查',
+    'arena_battle': 'NPC对战进行中',
+    'arena_result': 'NPC独立胜利结算',
     'penguin_unknown': '企鹅页面待核实',
     'penguin_lobby': '大厅 · 前往圣域',
     'penguin_sanctuary': '圣域',

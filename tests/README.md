@@ -61,7 +61,7 @@ Actual client screenshots/OCR/navigation evidence stay under ignored `.local`, n
 
 - 高亮空位专项另测真实Runner优先配置且不产生入场记录、相邻分离蓝环/蓝色身体区分；卡片等级与星级合并时只加强当前数字字段并保留原OCR。私有现场接续与源哈希只写本地账号记录。
 
-- `test_first_entry_power_warning.py`：仅原唯一sent/完整无其他输入链的首次战力差确认；不点不再显示、不新建入场、不重试；缺损文案/资源/容量/失败/归档/剧情战斗链/发送未知均拒绝。章节阈值紧框和单次任务标签的当前双读专项见 `test_tutorial_ocr.py`。
+- `test_first_entry_power_warning.py`：仅原唯一sent/完整无其他输入链的首次战力差确认，普通单次与已核实AUTO开启模式共用且各仅一次，未知/未开启/托管/重复模式拒绝；不点不再显示、不新建入场、不重试；缺损文案/资源/容量/失败/归档/剧情战斗链/发送未知均拒绝。章节阈值紧框和单次任务标签的当前双读专项见 `test_tutorial_ocr.py`。
 
 ## 剧情跳过与结算聊天误点保护
 

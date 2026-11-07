@@ -1,5 +1,6 @@
 """Map-local positive completion evidence; missing stars are never a clear."""
 from functools import lru_cache
+from map_identity import same_chapter
 import re
 import cv2
 import numpy as np
@@ -105,7 +106,7 @@ def clipped_story_completion(frame,entry,selected,rows):
     This is not evidence for an unattempted/archived story, battle or star count.
     """
     if entry.get('entry_kind')!='story_only' or selected.get('locked'):return None
-    if (selected.get('episode'),selected.get('chapter'),selected.get('stage'))!=(entry.get('episode'),entry.get('chapter'),entry.get('stage',-2)+1):return None
+    if not same_chapter(selected,entry) or selected.get('stage')!=entry.get('stage',-2)+1:return None
     ordered=sorted(rows,key=lambda row:row['stage'])
     nearby=[row for row in ordered if selected['stage']<=row['stage']<=selected['stage']+3][:3]
     if len(nearby)!=3 or nearby[0]['stage']!=selected['stage']:return None
@@ -126,3 +127,63 @@ def clipped_story_completion(frame,entry,selected,rows):
                 source='current_run_clipped_story_predecessor',
                 grid=[dict(stage=row['stage'],y=row['y']) for row in nearby],
                 star_count=None,clickable=False)
+
+def complete_map_row_labels(words,*,frame=None):
+    """Join adjacent same-baseline OCR fragments without inventing a title.
+
+    Keep the original numbered anchor and all OCR words unchanged. Components
+    need their own confidence and non-overlapping, tightly adjacent boxes;
+    unrelated rows, UI columns, duplicates and uncertain suffixes do not join.
+    """
+    import copy
+    numbered=re.compile(r'^\s*\d{1,2}\s*[.．、。]\s*.+')
+    result=[]
+    for anchor in words:
+        if not numbered.match(anchor.get('text','')) or not (100<=anchor['x']<=650 and 190<=anchor['y']<=730):
+            continue
+        merged=copy.deepcopy(anchor);components=[copy.deepcopy(anchor)]
+        proof=anchor.get('stage_label_verification') or {}
+        if frame is not None and proof.get('source') in ('current_map_label_roi_field_read','current_map_label_roi_dual_read'):
+            merged['stage_label_pending']=True
+            import hashlib
+            scores=proof.get('scores',[]);crop=proof.get('crop',[])
+            match=re.match(r'^\s*(\d{1,2})\s*[.．、。]',anchor['text'])
+            verified=(len(scores)==(1 if proof.get('source')=='current_map_label_roi_field_read' else 2) and all(isinstance(score,(int,float)) and .98<=score<=1 for score in scores)
+                and proof.get('captured_at')==frame.at and len(crop)==4 and match
+                and proof.get('number')==int(match[1]) and proof.get('anchor_text')==anchor['text']
+                and isinstance(proof.get('text'),str) and proof['text'].startswith(re.sub(r'\s+','',anchor['text'])))
+            if verified:
+                x1,y1,x2,y2=crop
+                verified=all(isinstance(v,int) for v in crop) and 0<=x1<x2<=1600 and 0<=y1<y2<=900
+                if verified:verified=hashlib.sha256(frame.image[y1:y2,x1:x2].tobytes()).hexdigest()==proof.get('crop_sha256')
+            if verified:
+                merged.update(text=proof['text'],score=min(scores),source=proof['source'],
+                    label_components=copy.deepcopy(proof['components']),label_verification=copy.deepcopy(proof),stage_label_pending=False)
+                result.append(merged);continue
+        box=anchor.get('box') or []
+        if len(box)!=4:
+            result.append(merged);continue
+        right=max(point[0] for point in box)
+        candidates=[]
+        for word in words:
+            points=word.get('box') or []
+            if (word is anchor or word.get('score',0)<.85 or len(points)!=4
+                or not 100<=word['x']<=650 or abs(word['y']-anchor['y'])>8
+                or numbered.match(word.get('text',''))):continue
+            left=min(point[0] for point in points)
+            if left>=right-2:candidates.append((left,word))
+        candidates.sort(key=lambda item:item[0])
+        for index,(left,word) in enumerate(candidates):
+            if left-right>24:break
+            end=max(point[0] for point in word['box'])
+            if left<right-2:continue
+            # Overlapping alternatives are ambiguous, not extra title letters.
+            if index+1<len(candidates) and candidates[index+1][0]<end-2:break
+            merged['text']+=word['text'];components.append(copy.deepcopy(word));right=end
+        if merged.get('stage_label_pending') and len(components)>=merged.get('stage_label_candidate_count',2):
+            merged['stage_label_pending']=False
+        if len(components)>1:
+            merged.update(score=min(word['score'] for word in components),
+                          source='current_same_row_label_components',label_components=components)
+        result.append(merged)
+    return result

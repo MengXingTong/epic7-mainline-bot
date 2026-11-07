@@ -21,7 +21,7 @@ def atomic_json(path,value):
     os.replace(tmp,path)
 
 
-def load_settings(home=HOME):
+def load_settings(home=HOME, *, inherit_legacy=True):
     saved=read_json(Path(home)/'settings.json')
     from assistant_portable import enabled,registered_root
     if enabled():
@@ -41,9 +41,9 @@ def load_settings(home=HOME):
     if saved is not None:
         result={**saved,'observe':False,'pc_input':'messages','start_policy':'current_screen','fast_mode':True}
         result.pop('limit',None);return result
-    prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{})
+    prefs=read_json(CODE_ROOT/'.local/pc/preferences.json',{}) if inherit_legacy else {}
     registered=registered_root(home)
-    root=prefs.get('data_dir','') or (str(registered) if registered else '')
+    root=(str(registered) if registered else '') or prefs.get('data_dir','')
     # Existing history is referenced in place, never copied/reset by the GUI.
     result={'client':'auto','task':'mainline','pc_input':'messages','observe':False,
             'data_dir':root,'worker_python':'','mumu':{},'start_policy':'current_screen','fast_mode':True}
@@ -78,9 +78,13 @@ def gate_mainline(state,stop_exists=False):
         raise ValueError('主线保留停止状态：'+str(state.get('status',''))+'；不会自动清除停止记录。')
 
 
-def validate_run(settings,target,allow_reconcile=False):
-    if settings.get('task') not in ('mainline','abyss','saint_3_7','dimension','theater','penguin'):raise ValueError('未知的任务类型。')
+def validate_run(settings,target,allow_reconcile=False,*,home=HOME):
+    if settings.get('task') not in ('mainline','abyss','saint_3_7','dimension','theater','penguin','arena'):raise ValueError('未知的任务类型。')
     if target.get('client') not in ('mumu','pc'):raise ValueError('所选客户端目标无效。')
+    if settings.get('task')=='arena':
+        from arena_core import count
+        count(settings.get('arena_count',''))
+        if settings.get('observe'):raise ValueError('竞技场必须明确指定次数开始，不从观察任务发送入场。')
     if settings.get('task')=='penguin':
         from penguin_core import quantity
         quantity(settings.get('penguin_quantity',''))
@@ -89,8 +93,8 @@ def validate_run(settings,target,allow_reconcile=False):
     if settings.get('task')=='theater' and target['client']!='pc':raise ValueError('月光剧场目前仅接入实验性 PC 后台模式；MuMu尚未验收。')
     if target['client']=='pc' and settings.get('pc_input')!='messages':raise ValueError('桌面端输入模式无效；请使用后台窗口消息。')
     from assistant_portable import enabled,registered_root
-    if not settings.get('data_dir') and registered_root() is None:
-        return HOME/'observations',{'attempted':{},'completed':{}}
+    if not settings.get('data_dir') and registered_root(home) is None:
+        return Path(home)/'observations',{'attempted':{},'completed':{}}
     root,state=history_gate(settings)
     if settings['task']=='mainline' and not settings.get('observe',False):
         if settings.get('start_policy')=='current_screen':
@@ -173,11 +177,27 @@ def load_theater_resume_request(run_id, home=HOME):
     if process_is_alive(active.get('worker_pid')):
         raise ValueError('原工作进程尚未退出；不启动第二个写入者。')
     settings = request.get('settings', {})
+    if settings.get('task')=='arena':
+        import hashlib,time
+        from arena_journal import ArenaJournal
+        root,_=validate_run(settings,request['target'],allow_reconcile=True)
+        if (root/'STOP').exists():raise ValueError('STOP仍否决竞技场重载。')
+        journal=ArenaJournal(root,run_id,settings['arena_count'])
+        entry=journal.active
+        if entry:
+            rows=journal.state['entry_dispatches'].get(entry['key'],[])
+            if entry['run_id']!=run_id or len(rows)!=1 or rows[0]['status']!='sent':
+                raise ValueError('原竞技场入场不是唯一已发送链；不重载。')
+        atomic_json(folder/('arena-maintenance-'+str(time.time_ns())+'.json'),dict(run_id=run_id,at=time.time(),request_sha256=hashlib.sha256((folder/'request.json').read_bytes()).hexdigest(),state_sha256=hashlib.sha256(journal.path.read_bytes()).hexdigest(),purpose='只加载新代码，保留同run/attempted/active/sent；不重发入场'))
+        return request
     if settings.get('task')=='mainline':
         maintenance=read_json(folder/'mainline-maintenance-request.json',{})
         if maintenance.get('run_id')!=run_id or Path(maintenance.get('run_dir','')).resolve()!=folder:
             raise ValueError('缺少原主线run的明确维护请求；不按新开始替代。')
-        root,_=validate_run(settings,request['target'],allow_reconcile=True)
+        # A worker may have audited a stale GUI cache into the target's
+        # original profile. The maintenance validator binds this effective
+        # path to that receipt; never read the other client's cached state.
+        root,_=validate_run(maintenance['settings'],request['target'],allow_reconcile=True)
         from mainline_maintenance import validate_maintenance
         validate_maintenance(maintenance,root,read_json(root/'state.json',{}),before_activation=True)
         return maintenance

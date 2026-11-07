@@ -8,12 +8,16 @@ sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('dimension_vision.py','dimension_ocr.py','dimension_routes.py','dimension_route_vision.py','dimension_core.py','dimension_journal.py','dimension_worker.py','ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
 SOURCES+=('client_viewport.py','entry_journal.py','story_open_ack.py','free_notices.py','Start.cmd','PCStart.cmd')
+SOURCES+=('mumu_discovery.py','assistant_instances.py')
+SOURCES+=('progression_evidence.py','progression_facts.py','map_identity.py','entry_preparation.py')
+SOURCES+=('ui_control_guard.py','chat_recovery.py')
+SOURCES+=('arena_core.py','arena_worker.py','arena_journal.py','arena_vision.py')
 SOURCES+=('penguin_core.py','penguin_vision.py','penguin_journal.py','penguin_worker.py')
 SOURCES+=('theater_core.py','theater_vision.py','theater_journal.py','theater_worker.py')
 SOURCES+=('tutorial_core.py','tutorial_ocr.py','mainline_maintenance.py','story_reopen.py','free_story_handoff.py','mainline_story_results.py')
 SOURCES+=('tutorial_entry_handoff.py','tutorial_control_templates.py','tutorial_navigation.py','tutorial_team_dialog.py','tutorial_battle_confirmation.py')
 SOURCES+=('theater_directory.py','theater_ticket_ocr.py','theater_pending_confirmation.py')
-VERSION='1.4.11-preview'
+VERSION='1.4.12-preview'
 RELEASE_DATE='2026-11-07'
 
 
@@ -117,13 +121,22 @@ def build_update(package):
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','STALL_VALIDATION.md','DIMENSION_VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
     names.update(('THEATER_VALIDATION.md','MAINLINE_VALIDATION.md'))
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 / v1.4.7 / v1.4.8 / v1.4.9 / v1.4.10 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 / v1.4.7 / v1.4.8 / v1.4.9 / v1.4.10 / v1.4.11 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.12 修复AUTO开启的首次入场被战斗指南误拦；仅确认原唯一入场，不点不再显示、不重开。
+主线使用当前周期已知控件及地图通关/原锁定后继解锁事实推进，不把点击、等待或缺切页判作战败。
+包含误触聊天原生返回恢复、多助手按目标互斥、MuMu实例发现与原进度路由修复。
+新增指定次数NPC竞技场（实验性）；每把独立胜利返回列表后才继续，不买挑战书、不重试失败。
+仅有限本机PC 7把NPC闭环已实测；MuMu竞技场、多开并行实战、其他几何/跨机器仍未验收。
+聊天自动关闭与AUTO战力确认仍无本次实机完整闭环，不能因离线测试通过声称实机已修复全部场景。
+完整已知页面不等待整屏特效静止；未知/资源/容量/战败/窗口/过期/关键落盘保护保留。
+仅保留已审计原路径的同run维护来源，不分发私人状态或一次性接续许可。
 
 v1.4.11 修复普通UI按下前全局按键冲突的临时让行、旧帧重新取图与入场响应等待被提前清除。
 完整免费章节奖励布局不再按Episode/章节标题格式硬拦截；标题仅辅助，不放开外传未知入场。
@@ -151,7 +164,7 @@ v1.4.9 包含实验性PC月光剧场和次元探查；次元仍为开发中，�
 完整范围见 THEATER_VALIDATION.md、DIMENSION_VALIDATION.md 与 CHANGELOG.md。
 更新只覆盖程序、资源与说明，不包含账号、截图、OCR、日志、设备配置或凭据；不要删除原进度。
 
-以下为历史版本变更（以v1.4.11当前规则为准）：
+以下为历史版本变更（与上述本次规则冲突时以上述规则为准）：
 
 v1.4.8 在画面/控件持续变化时保持零输入观察，稳定后再判断；用户操作时先让行。
 普通深渊未确认/容量弹窗也先等稳定；主按钮运行/等待时保持白字。

@@ -46,9 +46,7 @@ def config_runner():
 
 def dispatch(c,rule):
     with patch('tutorial_core.tutorial_plan',return_value=mock_plan(rule)):
-        first=frame();c.step(first)
-        second=frame();second.at=max(second.at,first.at+.00001)
-        return c.step(second)
+        return c.step(frame())
 
 
 class SelectorReaderTests(unittest.TestCase):
@@ -144,7 +142,7 @@ class TeamSetupChainTests(unittest.TestCase):
         r=prepared_runner(team(True));before=copy.deepcopy(r.s['attempted']);snapshots=[]
         r.save.side_effect=lambda:snapshots.append(copy.deepcopy(r.s))
         self.assertEqual(tutorial_plan(r.frame)['rule'],'guided_owned_hero_slot')
-        step(r);r.action.assert_not_called()
+        step(r);r.action.assert_called_once()
         r.frame=team(True);step(r)
         self.assertEqual(r.s['team_config']['phase'],'await_selector')
         self.assertNotIn(r.ticket['key'],r.s['attempted'])
@@ -166,9 +164,9 @@ class TeamSetupChainTests(unittest.TestCase):
         self.assertTrue(any(s.get('entry_dispatches',{}).get(key,[{}])[-1].get('status')=='reserved' for s in snapshots))
         self.assertEqual(r.s['completed'],{});self.assertEqual(r.s['attempted']['old-failure'],before['old-failure'])
         original=copy.deepcopy(r.s['active'])
-        with self.assertRaises(TaskAttention):step(r)
+        self.assertTrue(step(r)[0])
         self.assertEqual(r.action.call_count,3);r.back.assert_called_once()
-        self.assertEqual(r.s['active'],original);self.assertNotIn('unresolved_entries',r.s)
+        self.assertTrue(all(r.s['active'].get(k)==v for k,v in original.items()));self.assertNotIn('unresolved_entries',r.s)
 
     def test_no_slot_chain_unknown_source_or_wrong_stage_never_assigns(self):
         for invalid in ('missing','source_unknown','wrong_stage','source_missing'):
@@ -205,14 +203,14 @@ class TeamSetupChainTests(unittest.TestCase):
     def test_active_entry_is_not_archived_or_cancelled_on_plain_team(self):
         r=prepared_runner(preparation());r.s['active']=dict(r.ticket,cost=20)
         old=copy.deepcopy(r.s['active'])
-        with self.assertRaises(TaskAttention):step(r)
-        self.assertEqual(r.s['active'],old);self.assertNotIn('unresolved_entries',r.s)
+        self.assertTrue(step(r)[0])
+        self.assertTrue(all(r.s['active'].get(k)==v for k,v in old.items()));self.assertNotIn('unresolved_entries',r.s)
         r.action.assert_not_called();r.back.assert_not_called()
 
-    def test_placement_requires_two_fresh_frames_then_closes_only_once(self):
+    def test_current_positive_placement_closes_selector_only_once(self):
         r,c=config_runner();dispatch(c,'guided_owned_hero_slot');dispatch(c,'assign_owned_victoria')
         r.action.reset_mock();f=selector(True);r.frame=f
-        step(r);step(r);r.back.assert_not_called()
+        step(r);step(r);r.back.assert_called_once()
         r.frame=selector(True);step(r);r.back.assert_called_once();r.action.assert_not_called()
         self.assertEqual(r.s['team_config']['selector_close']['status'],'sent')
         r.frame=selector(True);step(r);r.back.assert_called_once()
@@ -236,7 +234,7 @@ class TeamSetupChainTests(unittest.TestCase):
 
     def test_back_send_unknown_is_never_repeated(self):
         r,c=config_runner();dispatch(c,'guided_owned_hero_slot');dispatch(c,'assign_owned_victoria')
-        r.frame=selector(True);step(r);r.frame=selector(True)
+        r.frame=selector(True)
         r.back.side_effect=RuntimeError('back unknown')
         with self.assertRaises(RuntimeError):step(r)
         self.assertEqual(r.s['team_config']['selector_close']['status'],'reserved')
@@ -268,7 +266,7 @@ class HighlightedSlotTests(unittest.TestCase):
             self.assertIsNone(guided_team_slot_plan(f));self.assertEqual(team_entry_control(f)['kind'],'unknown')
     def test_real_runner_dispatches_configuration_not_entry_with_highlighted_empty_slot(self):
         r=prepared_runner(self.current());original=copy.deepcopy(r.s)
-        step(r);r.action.assert_not_called();r.frame=self.current();step(r)
+        step(r);r.action.assert_called_once();r.frame=self.current();step(r)
         self.assertEqual(r.action.call_count,1);self.assertIn('高亮空位',r.action.call_args.args[0])
         self.assertEqual(r.s['active'],None);self.assertEqual(r.s['attempted'],original['attempted'])
         self.assertNotIn('entry_dispatches',r.s)

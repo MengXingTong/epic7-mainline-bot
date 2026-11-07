@@ -47,6 +47,15 @@ class GuiActivityTests(unittest.TestCase):
         self.assertIn('正在推进',self.app.activity_title.cget('text'))
         self.assertIn('请等待',self.app.activity_detail.cget('text'))
         self.assertEqual(self.app.start_button.cget('text'),'推进中…')
+    def test_result_evidence_wait_is_automatic_and_keeps_pause_stop_available(self):
+        self.app.read_only=False;self.worker('run');self.event('waiting_evidence','缺少原节点独立通关勾，持续取图核实')
+        self.assertIn('自动推进',self.app.activity_title.cget('text'))
+        self.assertEqual(self.app.start_button.cget('text'),'核实结果中…')
+        self.assertEqual(self.app.start_button.cget('state'),'disabled')
+        self.assertEqual(self.app.pause_button.cget('state'),'normal')
+        self.assertEqual(self.app.stop_button.cget('state'),'normal')
+        self.app.pause();self.app.command.assert_called_with('pause')
+
     def test_pause_request_waits_for_ack(self):
         self.worker();self.app.pause()
         self.assertEqual(self.app.mode,'pausing');self.assertIn('正在暂停',self.app.activity_title.cget('text'))
@@ -60,6 +69,28 @@ class GuiActivityTests(unittest.TestCase):
     def test_dead_worker_not_shown_running(self):
         child=self.worker();child.poll.return_value=0;self.app.events.put(('exit',123));self.app.pump()
         self.assertEqual(self.app.mode,'blocked');self.assertNotIn('正在观察',self.app.activity_title.cget('text'))
+    def test_terminal_status_before_process_exit_is_reconciled_without_exit_event(self):
+        child=self.worker('run');self.event('stopped')
+        self.assertEqual(self.app.start_button.cget('text'),'等待进程退出…')
+        child.poll.return_value=0;self.app.pump()
+        self.assertIsNone(self.app.process)
+        self.assertEqual(self.app.mode,'stopped')
+        self.assertEqual(self.app.start_button.cget('text'),'开始推进')
+        self.assertEqual(self.app.start_button.cget('state'),'normal')
+        self.app.command.assert_not_called()
+    def test_early_eof_exit_event_never_unlocks_a_live_writer(self):
+        child=self.worker('run');self.event('stopped')
+        self.app.events.put(('exit',child.pid));self.app.pump()
+        self.assertIs(self.app.process,child)
+        self.assertEqual(self.app.start_button.cget('state'),'disabled')
+        child.poll.return_value=0;self.app.pump()
+        self.assertIsNone(self.app.process)
+        self.assertEqual(self.app.start_button.cget('state'),'normal')
+    def test_old_exit_event_cannot_detach_a_new_worker(self):
+        child=self.worker('run');self.app.events.put(('exit',999));self.app.pump()
+        self.assertIs(self.app.process,child)
+        self.assertEqual(self.app.mode,'run')
+
     def test_stale_status_from_old_run_ignored(self):
         self.worker();self.app.events.put(('worker',{'kind':'status','run_id':'old','mode':'run','status':'old'}));self.app.pump()
         self.assertEqual(self.app.mode,'observe')
@@ -77,8 +108,8 @@ class GuiActivityTests(unittest.TestCase):
         import tempfile,json,sys
         from pathlib import Path
         with tempfile.TemporaryDirectory() as d:
-            home=Path(d);self.app.settings.update(worker_python=sys.executable,observe=True)
-            target={'client':'pc','label':'test'};self.app.filtered=[target];self.app.instance.set('test')
+            home=Path(d);self.app.home=home;self.app.base_home=home;self.app.settings.update(worker_python=sys.executable,observe=True)
+            target={'client':'pc','label':'test','hwnd':1,'pid':2,'created':3.,'exe':'synthetic-game.exe','title':'synthetic'};self.app.filtered=[target];self.app.instance.set('test')
             child=Mock();child.pid=123;child.poll.return_value=None
             with patch('assistant_app.HOME',home),patch('assistant_app.validate_run',return_value=(home,{})),patch('assistant_portable.save_settings'),patch('assistant_app.subprocess.Popen',return_value=child) as launch,patch('assistant_app.threading.Thread'):
                 self.app.start()

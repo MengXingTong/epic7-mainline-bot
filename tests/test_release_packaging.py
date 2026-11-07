@@ -55,6 +55,18 @@ class ReleasePackagingTests(unittest.TestCase):
         for name in ('free_notices','story_open_ack','mainline_maintenance','tutorial_core','penguin_worker'):
             self.assertIn(name,included)
 
+    def test_selfcheck_task_contract_matches_the_packaged_gui_declarations(self):
+        import ast
+        root=Path(build.__file__).resolve().parent
+        gui=ast.parse((root/'assistant_app.py').read_text(encoding='utf-8'))
+        tasks=next(ast.literal_eval(n.value) for n in gui.body if isinstance(n,ast.Assign)
+                   and any(isinstance(t,ast.Name) and t.id=='TASKS' for t in n.targets))
+        check=ast.parse((root/'portable_selfcheck.py').read_text(encoding='utf-8'))
+        declared=[ast.literal_eval(n.test.comparators[0]) for n in ast.walk(check) if isinstance(n,ast.Assert)
+                  and isinstance(n.test,ast.Compare) and ast.unparse(n.test.left)=="ui['tasks']"]
+        self.assertEqual(declared,[list(tasks.values())])
+        self.assertIn('arena',declared[0])
+
     def test_update_contains_current_validation_and_no_runtime_or_private_state(self):
         import json,zipfile
         with tempfile.TemporaryDirectory(prefix='epic7-clean-update-') as folder:

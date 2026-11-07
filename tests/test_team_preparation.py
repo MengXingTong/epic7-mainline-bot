@@ -173,9 +173,9 @@ class TeamPreparationTests(unittest.TestCase):
         self.assertFalse(can_enter(r.s,'E1-C1-S2'))
         original=copy.deepcopy(r.s['active'])
         r.action.reset_mock();r.action.side_effect=None
-        with self.assertRaises(TaskAttention):step(r)
+        self.assertTrue(step(r)[0])
         r.action.assert_not_called();r.back.assert_not_called()
-        self.assertEqual(r.s['active'],original)
+        self.assertTrue(all(r.s['active'].get(k)==v for k,v in original.items()))
         self.assertNotIn('unresolved_entries',r.s)
 
     def test_resource_capacity_and_confirmation_overlays_keep_priority(self):

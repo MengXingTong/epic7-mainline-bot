@@ -48,14 +48,36 @@ class FirstEntryPowerWarningTests(unittest.TestCase):
             elif mode=='archive':s['unresolved_entries']=[{'entry':self.original}]
             else:s['active'][{'story':'entry_kind','battle':'battle_seen','cost':'cost'}[mode]]={'story':'story_only','battle':True,'cost':0}[mode]
             with self.assertRaises(ValueError):confirmation_source(s,self.path)
+    def use_mode(self,mode):
+        original=copy.deepcopy(self.original);original['team_entry_mode']=mode
+        self.state.update(active=copy.deepcopy(original),attempted={'stage':copy.deepcopy(original)},
+            entry_dispatches={'stage':[dict(status='sent',entry=copy.deepcopy(original),original_sha256=attempt_digest(original))]})
+    def test_auto_on_first_entry_has_the_same_one_shot_confirmation(self):
+        self.use_mode('auto_on')
+        self.assertEqual(confirmation_source(self.state,self.path)['original']['team_entry_mode'],'auto_on')
+        r,c=self.controller();before=copy.deepcopy(r.s);snap=[]
+        r.action.side_effect=lambda *a:snap.append(copy.deepcopy(r.s))
+        c.step(current());c.step(current());TutorialController(r).step(current())
+        r.action.assert_called_once();self.assertEqual(r.action.call_args.args[1]['text'],'确认')
+        self.assertEqual(snap[0]['entry_confirmations']['stage']['status'],'reserved')
+        self.assertEqual(r.s['entry_confirmations']['stage']['status'],'sent')
+        for key in before:self.assertEqual(r.s[key],before[key])
+    def test_unverified_disabled_and_repeat_modes_never_confirm(self):
+        for mode in ('unknown','enable_auto','hosted','repeat','',None):
+            with self.subTest(mode=mode):
+                self.use_mode(mode)
+                with self.assertRaises(ValueError):confirmation_source(self.state,self.path)
+                r,c=self.controller()
+                with self.assertRaises(TaskAttention):c.step(current())
+                r.action.assert_not_called()
     def test_any_other_input_or_unknown_battle_playback_result_or_error_chain_rejects(self):
         for extra in (dict(kind='action',action='other'),dict(kind='back'),dict(kind='error'),*[dict(kind='screen',screen=m) for m in ('story','battle','loading','unknown','victory','defeat','settlement')]):
             original=copy.deepcopy(self.events);self.events.append(dict(time=self.events[0]['time'],**extra));self.save_events()
             with self.assertRaises(ValueError):confirmation_source(self.state,self.path)
             self.events=original;self.save_events()
-    def test_two_frames_durable_one_confirmation_and_no_new_entry(self):
+    def test_one_current_frame_durable_confirmation_and_no_new_entry(self):
         r,c=self.controller();old=copy.deepcopy(r.s);snap=[];r.action.side_effect=lambda *a:snap.append(copy.deepcopy(r.s))
-        f=current();c.step(f);c.step(f);r.action.assert_not_called();c.step(current());r.action.assert_called_once()
+        f=current();c.step(f);c.step(f);r.action.assert_called_once();c.step(current());r.action.assert_called_once()
         self.assertEqual(r.action.call_args.args[1]['text'],'确认')
         self.assertEqual(snap[0]['entry_confirmations']['stage']['status'],'reserved')
         for k in old:self.assertEqual(r.s[k],old[k])

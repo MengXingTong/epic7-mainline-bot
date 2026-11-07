@@ -298,7 +298,7 @@ class WorkerSequenceTests(unittest.TestCase):
     def test_animation_then_real_settlement_completes_once_without_attention(self):
         r, ctl, original = self.exercise([frame(TRANSITION), frame(RESULT), frame(RESULT)])
         self.assertEqual(r.seen, ['settlement']); ctl.attention.assert_not_called()
-        self.assertEqual(list(r.s['completed']), ['current']); self.assertIsNone(r.s['active'])
+        self.assertEqual(list(r.s['completed']), []); self.assertIsNotNone(r.s['active'])
         self.assertEqual(r.s['attempted'], original['attempted']); r.action.assert_called_once()
         self.assertEqual(r.action.call_args.args[1]['text'], '确认')
 
@@ -344,7 +344,7 @@ class WorkerSequenceTests(unittest.TestCase):
             frames.append(runner.Frame(runner.cv2.resize(im, (1600, 900)), [(w['box'], w['text'], w['score']) for w in data['words']]))
         r, ctl, _ = self.exercise(frames+[frames[-1]])
         self.assertEqual(r.seen, ['settlement']); ctl.attention.assert_not_called()
-        self.assertEqual(list(r.s['completed']), ['current']); r.action.assert_called_once()
+        self.assertEqual(list(r.s['completed']), []); r.action.assert_called_once()
 
     def test_changing_dialog_keeps_worker_observing_without_attention_or_intent(self):
         bright = frame(TRANSITION); bright.image[:] = 150
@@ -381,7 +381,7 @@ class WorkerSequenceTests(unittest.TestCase):
     def test_victory_then_independent_settlement_completes_only_at_settlement(self):
         r, ctl, original = self.exercise([victory_frame(), frame(RESULT), frame(RESULT)])
         self.assertEqual(r.seen, ['victory', 'settlement']); ctl.attention.assert_not_called()
-        self.assertEqual(list(r.s['completed']), ['current']); self.assertIsNone(r.s['active'])
+        self.assertEqual(list(r.s['completed']), []); self.assertIsNotNone(r.s['active'])
         self.assertEqual(r.s['attempted'], original['attempted']); self.assertEqual(r.action.call_count, 2)
         self.assertEqual(r.action.call_args.args[1]['text'], '确认')
 
@@ -423,7 +423,7 @@ class WorkerSequenceTests(unittest.TestCase):
         r, ctl, original = self.exercise([dark, bright])
         self.assertEqual(r.seen, ['settlement']); r.action.assert_called_once()
         self.assertEqual(r.action.call_args.args[1]['text'], '确认')
-        self.assertEqual(list(r.s['completed']), ['current'])
+        self.assertEqual(list(r.s['completed']), [])
         self.assertEqual(r.s['attempted'], original['attempted'])
         self.assertFalse(any(c.kwargs.get('mode')=='waiting_scene' for c in ctl.status.call_args_list))
 

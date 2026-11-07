@@ -26,7 +26,7 @@ class UnifiedTransport:
             if settings.get('pc_input')!='messages':raise PcSafetyError('前台模式已移除；请使用后台窗口消息。')
             from pc_message_backend import MessageWin32Api
             self.api=MessageWin32Api()
-            rows=self.api.windows(target['exe'],target['title'])
+            rows=[s for s in self.api.windows(target['exe'],target['title']) if s.hwnd==target['hwnd']]
             if len(rows)!=1 or rows[0].hwnd!=target['hwnd'] or rows[0].pid!=target['pid'] or rows[0].created!=target['created']:
                 raise PcSafetyError('所选桌面端实例已变化，已停止操作。')
             self.window=rows[0]
@@ -41,7 +41,7 @@ class UnifiedTransport:
     def ensure(self):
         self.check()
         if self.api:
-            rows=self.api.windows(self.target['exe'],self.target['title'])
+            rows=[s for s in self.api.windows(self.target['exe'],self.target['title']) if s.hwnd==self.target['hwnd']]
             if len(rows)!=1 or rows[0].identity()!=self.window.identity():raise PcSafetyError('桌面端进程或窗口已变化，已停止操作。')
             if not self.api.ready(rows[0]):raise PcSafetyError('桌面端后台窗口不可用或已最小化，已停止操作。')
             return rows[0]

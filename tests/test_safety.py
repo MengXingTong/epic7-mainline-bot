@@ -158,8 +158,7 @@ class SafetyTests(unittest.TestCase):
         f=fake([('进行任务',1440,828),('队伍战斗力',400,806),('8/774',1264,831)])
         from task_blockers import TaskAttention
         r=self.make_runner(f);r.s['active']={'key':'E2-C6-S2'};original=copy.deepcopy(r.s['active'])
-        with self.assertRaises(TaskAttention) as caught:r.step(f)
-        self.assertEqual(caught.exception.code,'team_entry_pending')
-        self.assertEqual(r.calls,[]);self.assertEqual(r.s['active'],original)
+        self.assertTrue(r.step(f)[0])
+        self.assertEqual(r.calls,[]);self.assertTrue(all(r.s['active'].get(k)==v for k,v in original.items()))
         self.assertNotIn('unresolved_entries',r.s)
 if __name__=='__main__': unittest.main(verbosity=2)

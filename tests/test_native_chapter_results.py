@@ -10,15 +10,21 @@ class NativeChapterResultTests(unittest.TestCase):
         return r.s,target,[dict(stage=2,locked=True)],trace
     def test_unbroken_native_next_chapter_is_independent_result_not_close_alone(self):
         s,d,rows,events=self.setup_case();self.assertIsNotNone(native_chapter_completion(s,d,rows,events))
+    def test_passive_transitions_and_natural_playback_do_not_erase_native_progress(self):
+        s,d,rows,events=self.setup_case()
+        events=[e for e in events if e.get('action') not in ('跳过剧情','确认跳过剧情')]
+        for scene in ('loading','unknown','unknown_dialog','result_transition'):
+            events.insert(1,dict(kind='screen',screen=scene,stage=s['active']['key']))
+        self.assertIsNotNone(native_chapter_completion(s,d,rows,events))
+
     def test_unverified_story_failed_archived_or_manual_navigation_cannot_infer_clear(self):
-        for change in ('no_play','same_chapter','jump','already_clear','next_unlocked','unknown','navigation','archive'):
+        for change in ('no_play','same_chapter','jump','already_clear','next_unlocked','navigation','archive'):
             s,d,rows,events=self.setup_case()
             if change=='no_play':s['active'].pop('playback_observed_at')
             if change=='same_chapter':d['chapter']=1
             if change=='jump':d['chapter']=3
             if change=='already_clear':d['clear_badge']=True
             if change=='next_unlocked':rows[0]['locked']=False
-            if change=='unknown':events.insert(2,dict(kind='screen',screen='unknown_dialog'))
             if change=='navigation':events.insert(-1,dict(kind='action',action='完成本章后进入下一章',stage=s['active']['key']))
             if change=='archive':s['unresolved_entries']=[dict(entry=copy.deepcopy(s['active']))]
             self.assertIsNone(native_chapter_completion(s,d,rows,events),change)

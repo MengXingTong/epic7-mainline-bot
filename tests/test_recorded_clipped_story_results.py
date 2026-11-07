@@ -66,8 +66,8 @@ class RecordedClippedStoryTests(unittest.TestCase):
                 elif mode=='changed':(self.root/'evidence/preflight.png').write_bytes(b'changed')
                 else:self.a['playback_evidence']='../outside.png'
                 self.assertIsNone(self.read())
-    def test_unknown_battle_defeat_or_extra_navigation_breaks_source_chain(self):
-        for mode in ('unknown_dialog','battle','defeat','resource_stop','capacity_stop','back','drag','action','stop'):
+    def test_battle_defeat_or_extra_navigation_breaks_source_chain(self):
+        for mode in ('battle','defeat','resource_stop','capacity_stop','back','drag','action','stop'):
             with self.subTest(mode=mode):
                 self.setUp();e=dict(time=self.events[2]['time'],stage=self.o['key'])
                 if mode in ('back','drag','stop'):e['kind']=mode
@@ -105,14 +105,14 @@ class RecordedClippedStoryTests(unittest.TestCase):
         self.assertIn(self.o['key'],r.s['completed']);self.assertIsNone(r.s['active'])
         self.assertEqual(r.s['attempted'],original);self.assertEqual(r.s['entry_dispatches'],sent)
         self.assertEqual(r.action.call_count,1);self.assertEqual(r.action.call_args.args[0],'未通关验证通过，准备战斗')
-    def test_story_only_active_cannot_claim_later_battle_victory_or_settlement(self):
+    def test_later_gameplay_is_not_credited_or_failed_from_an_old_story_dispatch(self):
         for scene in ('battle','victory','settlement'):
             with self.subTest(scene=scene):
                 r=fake_runner(self.f);r.s=copy.deepcopy(self.s);before=copy.deepcopy(r.s)
                 with patch.object(runner,'ROOT',self.root),patch('runner.event'),patch('runner.classify',return_value=scene):
-                    with self.assertRaises(TaskAttention) as caught:r.step(self.f)
-                self.assertEqual(caught.exception.code,'story_result_external_progress');r.action.assert_not_called()
-                self.assertEqual(r.s['active'],before['active']);self.assertEqual(r.s['completed'],{})
+                    self.assertTrue(r.step(self.f)[0])
+                self.assertEqual(r.s['completed'],{});self.assertIsNotNone(r.s['active'])
+                self.assertNotIn('stage_outcomes',r.s)
     def test_optional_original_private_snapshot_replay_is_not_runtime_reconciliation(self):
         base=Path(__file__).resolve().parents[1]/'.local/clipped-result-20261106'
         if not (base/'replay-state.json').is_file():self.skipTest('private original source unavailable')

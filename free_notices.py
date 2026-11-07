@@ -56,17 +56,12 @@ class FreeNoticeController:
             self.departure=None;return
         current=target_binding(self.r,f)
         if not 0<=time.time()-f.at<=3:self.departure=None;return
-        prior=self.departure
-        if prior and (f.at,current,scene)==prior[:3]:return  # Worker and Runner may inspect the same frame.
         observation=dict(captured_at=f.at,binding=current,scene=scene,
-                         image_sha256=hashlib.sha256(f.image.tobytes()).hexdigest())
-        self.departure=(f.at,current,scene,observation)
-        if prior is None or not 0<f.at-prior[0]<=5 or current!=prior[1] or scene!=prior[2]:
-            observation['evidence']=self.r.evidence('free-notice-departure-'+record['id']+'-'+str(time.time_ns()))
-            return
-        observation['evidence']=self.r.evidence('free-notice-gone-'+record['id'])
+                         image_sha256=hashlib.sha256(f.image.tobytes()).hexdigest(),
+                         evidence=self.r.evidence('free-notice-gone-'+record['id']))
         record.update(phase='dismissed',gone_at=time.time(),gone_scene=scene,
-                      disappearance_evidence=observation['evidence'],disappearance_observations=[prior[3],observation])
+                      disappearance_evidence=observation['evidence'],disappearance_observations=[observation],
+                      recognition_policy='single_current_observation')
         self.r.s['free_notice_dismissals']['active_id']=None
         self.departure=None;self.r.save()
     def step(self,f):
@@ -88,15 +83,8 @@ class FreeNoticeController:
             self.pending=None;r.s['reason']='免费提示关闭消息已发送，等待弹窗消失；不连点底层页面。';return True,.25
         if len(messages)>=MAX_CLOSE_MESSAGES:
             self.pending=None
-            return r.attention('free_notice_unresponsive','免费提示关闭仍未响应','当前同一弹窗已发送3条独立关闭消息，仍未确认消失；保留记录，不连续盲点。之后重新出现的弹窗不受本次次数限制。')
+            return r.observe_progress_evidence('notice_response',dict(code='notice_response',reason='免费提示当前仍可见，继续观察；未消失不代表关卡失败，不连续盲点。'))
         observation=dict(captured_at=f.at,binding=context,body=notice['body'],target=copy.deepcopy(notice['target']),image_sha256=hashlib.sha256(f.image.tobytes()).hexdigest())
-        previous=self.pending
-        self.pending=(f,observation)
-        if (previous is None or f is previous[0] or not 0<f.at-previous[0].at<=5
-            or previous[1]['binding']!=context or previous[1]['body']!=notice['body']
-            or max(abs(previous[1]['target'][key]-notice['target'][key]) for key in ('x','y'))>8):
-            observation['evidence']=r.evidence('free-notice-observe-'+str(time.time_ns()))
-            return True,.25
         observation['evidence']=r.evidence('free-notice-close-'+str(time.time_ns()))
         if record is None:
             ledger=r.s.setdefault('free_notice_dismissals',dict(schema=1,occurrences=[],active_id=None))
@@ -104,7 +92,7 @@ class FreeNoticeController:
                         opened_at=time.time(),phase='visible',binding=context,entry_context=entry_context(r),messages=[])
             ledger['occurrences'].append(record);ledger['active_id']=record['id']
         message=dict(id=uuid.uuid4().hex,status='reserved',reserved_at=time.time(),
-                     observations=[previous[1],observation])
+                     observations=[observation],recognition_policy='single_current_observation')
         record['messages'].append(message);self.pending=None
         r.save()  # Critical journal; failure must prevent the input.
         try:r.action(CLOSE_ACTION,notice['target'])

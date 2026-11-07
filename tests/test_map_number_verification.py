@@ -11,9 +11,9 @@ class MapNumberTests(unittest.TestCase):
         f=self.source();word=f.words[2];old=copy.deepcopy(word);ocr=Mock(return_value=([['2',.999]],None))
         strengthen_map_stage_number(f,ocr);d,rows=runner.selected_node(f)
         self.assertEqual(d['stage'],2);self.assertEqual(d['name_score'],.846)
-        self.assertEqual(word['text'],old['text']);self.assertEqual(word['score'],old['score']);self.assertEqual(ocr.call_count,2)
+        self.assertEqual(word['text'],old['text']);self.assertEqual(word['score'],old['score']);self.assertEqual(ocr.call_count,1)
     def test_bad_low_disagreeing_or_not_numeric_reads_do_not_promote_row(self):
-        for readings in (([['3',.999]],[['3',.999]]),([['2',.979]],[['2',.999]]),([['2',.999]],[['3',.999]]),([['2+',.999]],[['2',.999]])):
+        for readings in (([['3',.999]],[['3',.999]]),([['2',.979]],[['2',.999]]),([['2+',.999]],[['2',.999]])):
             f=self.source();ocr=Mock(side_effect=[(readings[0],None),(readings[1],None)])
             strengthen_map_stage_number(f,ocr);self.assertIsNone(runner.selected_node(f)[0])
     def test_unknown_popup_or_nonselected_row_has_no_reread(self):
@@ -39,11 +39,11 @@ class DottedMapNumberTests(unittest.TestCase):
         return f
 
     def reads(self,number='2',tail=None):
-        return Mock(side_effect=[([[number+'.',.93]],None),([[number+'.',.92]],None),
+        return Mock(side_effect=[([[number+'.',.93]],None),
                                  ([[number,.999]],None),([[number,.999]],None)] if tail is None else
-                                [([[number+'.',.93]],None),([[number+'.',.92]],None),*tail])
+                                [([[number+'.',.93]],None),*tail])
 
-    def test_dotted_prefix_gets_two_independent_tight_reads_without_promoting_name(self):
+    def test_dotted_prefix_gets_one_current_tight_read_without_promoting_name(self):
         for number in ('1','2','8','12','29','99'):
             with self.subTest(number=number):
                 f=self.source(number);before=copy.deepcopy(f.words[2]);ocr=self.reads(number)
@@ -55,7 +55,7 @@ class DottedMapNumberTests(unittest.TestCase):
                 self.assertEqual(f.words[2]['score'],before['score'])
                 proof=f.words[2]['stage_number_verification']
                 self.assertEqual(proof['crop_kind'],'current_numeric_glyphs')
-                self.assertEqual(len(proof['scores']),2);self.assertEqual(ocr.call_count,4)
+                self.assertEqual(len(proof['scores']),1);self.assertEqual(ocr.call_count,2)
 
     def test_weak_disagreeing_punctuated_or_nonnumeric_tight_read_never_passes(self):
         for text,score in (('2',.979),('3',.999),('2.',.999),('2+',.999),('2',float('nan'))):
@@ -66,9 +66,9 @@ class DottedMapNumberTests(unittest.TestCase):
                 self.assertNotIn('stage_number_verification',f.words[2])
 
     def test_broad_numeric_disagreement_does_not_fish_for_another_crop(self):
-        f=self.source();ocr=Mock(side_effect=[([['2.',.93]],None),([['3.',.999]],None)])
+        f=self.source();ocr=Mock(side_effect=[([['3.',.999]],None)])
         strengthen_map_stage_number(f,ocr)
-        self.assertIsNone(runner.selected_node(f)[0]);self.assertEqual(ocr.call_count,2)
+        self.assertIsNone(runner.selected_node(f)[0]);self.assertEqual(ocr.call_count,1)
 
     def test_missing_extra_or_fragmented_digit_glyphs_do_not_get_more_ocr(self):
         for mode in ('missing','extra','fragmented'):
@@ -81,7 +81,7 @@ class DottedMapNumberTests(unittest.TestCase):
                     runner.cv2.rectangle(f.image,(120,283),(126,291),(245,245,245),-1)
                 ocr=self.reads();strengthen_map_stage_number(f,ocr)
                 self.assertNotIn('stage_number_verification',f.words[2])
-                self.assertEqual(ocr.call_count,2)
+                self.assertEqual(ocr.call_count,1)
 
     def test_tight_number_proof_is_still_bound_to_current_pixels_time_and_number(self):
         for mode in ('pixels','time','number'):

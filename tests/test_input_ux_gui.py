@@ -22,7 +22,7 @@ class InputUxGuiTests(unittest.TestCase):
 
     def test_scene_wait_keeps_controls_readable_and_pause_stop_available(self):
         self.app.mode='waiting_scene';self.app.update_buttons()
-        self.assertEqual(self.app.start_button.cget('text'),'等待画面稳定…')
+        self.assertEqual(self.app.start_button.cget('text'),'核对画面中…')
         self.assertEqual(self.app.start_button.cget('state'),'disabled')
         self.assertEqual(self.app.start_button.cget('disabledforeground'),'white')
         self.assertEqual(self.app.start_button.cget('activeforeground'),'white')

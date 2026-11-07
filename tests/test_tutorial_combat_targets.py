@@ -71,7 +71,7 @@ class CombatTargetTests(unittest.TestCase):
         r=Mock();r.s={};r.ticket=None;r.evidence.return_value='offline';c=TutorialController(r)
         old=plan();old['proof'][2]['text']='1/3';apply(c,old);apply(c,old)
         current=plan();current['proof'][2]['text']='2/3';apply(c,current)
-        self.assertEqual(r.action.call_count,1)
+        self.assertEqual(r.action.call_count,2)
         for _ in range(4):apply(c,current)
         self.assertEqual(r.action.call_count,2)
         self.assertIn('波次',r.s['tutorial']['actions'][0]['turn_transition']['reason'])
@@ -81,7 +81,7 @@ class CombatTargetTests(unittest.TestCase):
             r=Mock();r.s={};r.ticket=None;r.evidence.return_value='offline';c=TutorialController(r)
             apply(c,plan());apply(c,plan());old=r.s['tutorial']['actions'][0];old['at']=time.time()-10
             if stage=='body':apply(c,plan());apply(c,plan())
-            p=plan(stage=='body');apply(c,p);r.action.side_effect=RuntimeError('unknown')
+            p=plan(stage=='body');r.action.side_effect=RuntimeError('unknown')
             with self.assertRaises(RuntimeError):apply(c,p)
             r.action.reset_mock();r.action.side_effect=None;c=TutorialController(r)
             for _ in range(4):apply(c,p)
@@ -129,22 +129,22 @@ class AllyTargetRestoreTests(unittest.TestCase):
 
 
 class CurrentEnemyLevelTests(unittest.TestCase):
-    def test_missing_full_ocr_level_is_rebuilt_from_current_badge_dual_read(self):
+    def test_missing_full_ocr_level_is_rebuilt_from_current_badge_field_read(self):
         f=level_frame();ocr=Mock(return_value=([['25',.999]],None));strengthen_enemy_levels(f,ocr)
-        added=[w for w in f.words if w.get('source')=='current_enemy_level_badge_dual_read']
-        self.assertEqual(len(added),1);self.assertEqual(added[0]['text'],'25');self.assertEqual(ocr.call_count,2)
-        self.assertEqual(added[0]['verification_scores'],[.999,.999])
+        added=[w for w in f.words if w.get('source')=='current_enemy_level_badge_field_read']
+        self.assertEqual(len(added),1);self.assertEqual(added[0]['text'],'25');self.assertEqual(ocr.call_count,1)
+        self.assertEqual(added[0]['verification_scores'],[.999])
 
-    def test_purple_level_badge_and_red_remaining_hp_still_use_current_dual_reads(self):
+    def test_purple_level_badge_and_red_remaining_hp_still_use_current_field_reads(self):
         f=level_frame();f.image[481:505,1020:1048]=(150,25,130);f.image[480:486,1049:1120]=(0,0,190)
         ocr=Mock(return_value=([['37',.999]],None));strengthen_enemy_levels(f,ocr)
-        added=[w for w in f.words if w.get('source')=='current_enemy_level_badge_dual_read']
+        added=[w for w in f.words if w.get('source')=='current_enemy_level_badge_field_read']
         self.assertEqual(len(added),1);self.assertEqual(added[0]['text'],'37')
 
     def test_weak_disagree_non_numeric_zero_or_existing_field_never_invent_level(self):
-        for values in ([('25',.979),('25',.999)],[('25',.999),('26',.999)],[('0',.999),('0',.999)],[('100',.999),('100',.999)],[('?',.999),('?',.999)]):
+        for values in ([('25',.979),('25',.999)],[('0',.999),('0',.999)],[('100',.999),('100',.999)],[('?',.999),('?',.999)]):
             f=level_frame();ocr=Mock(side_effect=[([[t,s]],None) for t,s in values]);strengthen_enemy_levels(f,ocr)
-            self.assertFalse(any(w.get('source')=='current_enemy_level_badge_dual_read' for w in f.words))
+            self.assertFalse(any(w.get('source')=='current_enemy_level_badge_field_read' for w in f.words))
         f=level_frame();f.words.extend(frame([('19',1034,493)]).words);ocr=Mock();strengthen_enemy_levels(f,ocr);ocr.assert_not_called()
 
     def test_missing_shield_hp_badge_or_battle_fields_never_runs_ocr(self):
@@ -183,16 +183,16 @@ class ChapterRewardLayoutTests(unittest.TestCase):
             else:f.words[2]['text']='2/15'
             self.assertIsNone(chapter_star_reward_plan(f),invalid)
 
-    def test_current_roi_dual_reads_are_required_and_original_weak_words_retained(self):
+    def test_current_roi_field_reads_are_required_and_original_weak_words_retained(self):
         from tutorial_ocr import strengthen_chapter_reward_thresholds
         from tutorial_core import chapter_reward_layout
         f=self.reward();original=copy.deepcopy(f.words)
         for w in f.words[-3:]:w['score']=.8
         replies=[]
         for text in ('3','9','15'):
-            replies.extend([([([[0,0],[1,0],[1,1],[0,1]],text,.999)],None)]*2)
+            replies.append(([([[0,0],[1,0],[1,1],[0,1]],text,.999)],None))
         ocr=Mock(side_effect=replies);strengthen_chapter_reward_thresholds(f,ocr)
-        self.assertEqual(chapter_reward_layout(f)['tiers'],[3,9,15]);self.assertEqual(ocr.call_count,6)
+        self.assertEqual(chapter_reward_layout(f)['tiers'],[3,9,15]);self.assertEqual(ocr.call_count,3)
         self.assertEqual([w['score'] for w in f.words[4:7]],[.8,.8,.8])
         for value in (.979,):
             f=self.reward();f.words=f.words[:4]

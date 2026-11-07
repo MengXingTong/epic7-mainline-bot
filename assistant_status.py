@@ -10,15 +10,16 @@ class Activity:
 
 
 def activity(mode, task="mainline", observe=True, alive=False):
-    task_name = {'mainline':'剧情关卡','saint_3_7':'圣女3-7','dimension':'次元探查（实验性）','theater':'月光剧场（实验性）','penguin':'买企鹅（实验性）'}.get(task,'普通深渊')
+    task_name = {'mainline':'剧情关卡','saint_3_7':'圣女3-7','dimension':'次元探查（实验性）','theater':'月光剧场（实验性）','penguin':'买企鹅（实验性）','arena':'竞技场 NPC（实验性）'}.get(task,'普通深渊')
     if mode in ("starting", "checking") and alive:
         return Activity("检查中 · 尚未购买" if task=="penguin" else "检查中 · 尚未进入关卡", "#2465a4", True)
-    if mode in ("run", "observe", "waiting_input", "waiting_scene") and not alive:
+    if mode in ("run", "observe", "waiting_input", "waiting_scene", "waiting_evidence") and not alive:
         return Activity("已停止 · 工作进程不在运行", "#a63d34")
     states = {
         "idle": Activity("未启动 · 当前没有任务在运行", "#65776f"),
         "recovering": Activity("正在恢复画面 · 暂停输入", "#956116", True),
         "waiting_input": Activity("等待输入空闲 · 随后自动继续", "#956116", True),
+        "waiting_evidence": Activity("核实结果中 · 证据齐全后自动推进", "#956116", True),
         "waiting_scene": Activity("等待画面稳定 · 持续观察中", "#956116", True),
         "attention": Activity("等待处理 · 已暂停操作", "#956116"),
         "scanning": Activity("检测客户端中 · 尚未启动任务", "#2465a4", True),

@@ -43,7 +43,7 @@ def source_chain(r):
         or a.get('outcome') in ('defeat','failed','unknown') or original.get('outcome') in ('defeat','failed','unknown')
         or key in state.get('completed',{}) or len(sends)!=1 or sends[0].get('status')!='sent'
         or sends[0].get('entry')!=original or sends[0].get('original_sha256')!=attempt_digest(original)
-        or any(a.get(k)!=original.get(k) for k in ('key','episode','chapter','stage','name','cost','entry_kind','start_epoch'))
+        or any(a.get(k)!=original.get(k) for k in ('key','episode','chapter','chapter_suffix','stage','name','cost','entry_kind','start_epoch'))
         or any(a.get(k) for k in ('playback_observed_at','playback_evidence','story_seen','victory_seen','exit_seen','battle_seen','defeat_seen'))
         or any(row.get('entry',{}).get('key')==key for row in state.get('unresolved_entries',[]))
         or any(row.get('key')==key for name in ('free_story_handoffs','story_reopen_authorizations','tutorial_entry_handoffs') for row in state.get(name,[]))):
@@ -68,7 +68,7 @@ def register_open(r,dispatch,*,seed=False):
     if dispatch['id'] in book:raise ValueError('原入口响应链已登记，不能重置消息次数。')
     record=dict(policy=POLICY,run_id=r.run_id,key=original['key'],original_dispatch_id=dispatch['id'],
                 original_sha256=attempt_digest(original),preflight_sha256=preflight_hash(r,original),
-                binding=binding(r),phase='awaiting_acceptance',registered_at=time.time(),messages=[])
+                binding=binding(r),raw_size=list(r.frame.raw_size),phase='awaiting_acceptance',registered_at=time.time(),messages=[])
     if seed:record['maintenance_seed']=copy.deepcopy(r.ack_maintenance_seed)
     book[dispatch['id']]=record
     return record
@@ -92,7 +92,7 @@ def seed_original_open(r,seed,proof):
     return record
 
 
-def proven_notice_detours(r,record,tail):
+def proven_notice_detours(r,record,tail,*,evidence_root=None):
     """Match *each* passive close to its durable, same-entry dismissal receipt.
 
     A label/screen allowlist alone is insufficient: unrelated, failed or still
@@ -112,7 +112,7 @@ def proven_notice_detours(r,record,tail):
         try:return datetime.fromisoformat(e['time']).timestamp()
         except (KeyError,TypeError,ValueError):invalid()
     def image_proof(observation):
-        root=Path(runner.ROOT).resolve();path=(root/observation.get('evidence','')).resolve()
+        root=Path(runner.ROOT if evidence_root is None else evidence_root).resolve();path=(root/observation.get('evidence','')).resolve()
         if (root/'evidence').resolve() not in path.parents or not path.is_file():invalid()
         image=runner.cv2.imread(str(path))
         if image is None or image.shape!=(900,1600,3):invalid()
@@ -135,10 +135,11 @@ def proven_notice_detours(r,record,tail):
         indices=[];hashes=[];last_finished=0.
         for message in messages:
             observations=message.get('observations',[])
-            if message.get('status')!='sent' or len(observations)!=2:invalid()
-            first,second=observations
-            if (not original['reserved_at']<=first.get('captured_at',0)<second.get('captured_at',0)<=message.get('reserved_at',0)
-                or not 0<second['captured_at']-first['captured_at']<=5
+            single=message.get('recognition_policy')=='single_current_observation'
+            if message.get('status')!='sent' or len(observations)!=(1 if single else 2):invalid()
+            first,second=observations[0],observations[-1]
+            if (not original['reserved_at']<=first.get('captured_at',0)<=second.get('captured_at',0)<=message.get('reserved_at',0)
+                or (not single and not 0<second['captured_at']-first['captured_at']<=5)
                 or not last_finished<=message['reserved_at']<=message.get('finished_at',0)<=notice.get('gone_at',0)) :invalid()
             last_finished=message['finished_at']
             for observation in observations:
@@ -165,11 +166,17 @@ def proven_notice_detours(r,record,tail):
         returned=[i for i,e in enumerate(tail) if i>indices[-1] and e.get('kind')=='screen' and e.get('screen')=='map'
                   and e.get('stage')==record['key'] and last_finished-1<epoch(e)<=notice['gone_at']]
         if not returned:invalid()
+        # The same still-visible notification can be recognized again after
+        # its close message. Those are observations, not extra close inputs.
+        remaining={i for i in screens if indices[-1]<i<returned[0]}
+        if any(tail[i].get('stage')!=record['key'] or not original['reserved_at']-1<epoch(tail[i])<=notice['gone_at'] for i in remaining):invalid()
+        covered.update(remaining)
         last_return_index=returned[0]
         gone=notice.get('disappearance_observations')
         if gone is not None:
-            if (len(gone)!=2 or not last_finished<=gone[0].get('captured_at',0)<gone[1].get('captured_at',0)<=notice['gone_at']
-                or not 0<gone[1]['captured_at']-gone[0]['captured_at']<=5):invalid()
+            single=notice.get('recognition_policy')=='single_current_observation'
+            if (len(gone)!=(1 if single else 2) or not last_finished<=gone[0].get('captured_at',0)<=gone[-1].get('captured_at',0)<=notice['gone_at']
+                or (not single and not 0<gone[-1]['captured_at']-gone[0]['captured_at']<=5)):invalid()
             for observation in gone:
                 if observation.get('binding')!=context or observation.get('scene')!='map' or not observation.get('image_sha256'):invalid()
                 image,sha=image_proof(observation)
@@ -215,7 +222,7 @@ class StoryOpenAcknowledgement:
     def record(self):
         a=self.r.s.get('active') or {}
         rows=self.r.s.get('entry_dispatches',{}).get(a.get('key'),[])
-        if len(rows)!=1:return None
+        if len(rows)!=1 or rows[0].get('status')!='sent':return None
         return self.r.s.get('story_open_acknowledgements',{}).get(rows[0].get('id'))
     def observe_scene(self,scene,f):
         if scene!='map':self.pending=None
@@ -248,7 +255,7 @@ class StoryOpenAcknowledgement:
         if time.time()-sent_at<ACK_WAIT_SECONDS:
             self.pending=None;return True,.25
         if len(record['messages'])>=MAX_ADDITIONAL_MESSAGES:
-            return r.attention('story_open_unacknowledged','故事入口多次未响应','已发送首次入口及2次独立补发，仍未确认游戏接受；不是已通关，停止盲目补发并保留现场。')
+            return r.observe_progress_evidence('story_open_response',dict(code='story_open_response',reason='当前仍未显示剧情入口响应，继续观察实际通关或后继解锁；未响应不等于失败，不追加真实重试。'),r.s['active'])
         d,rows,proof=r.map_ticket(f);control=runner.mainline_map_control(f)
         a=r.s['active'];next_row=next((row for row in rows if row.get('stage')==a['stage']+1),None)
         if (runner.classify(f)!='map' or not d or d.get('key')!=record['key'] or d.get('locked') is not False
@@ -257,20 +264,14 @@ class StoryOpenAcknowledgement:
             or control['target'].get('score',0)<.98):
             self.pending=None;return None
         if not 0<=time.time()-f.at<=3:self.pending=None;return True,.25
+        if list(f.raw_size)!=record.get('raw_size',list(f.raw_size)):return None
         target=control['target']
         observation=dict(captured_at=f.at,map=copy.deepcopy(d),target=copy.deepcopy(target),
                          image_sha256=hashlib.sha256(f.image.tobytes()).hexdigest(),binding=binding(r))
-        if self.pending is None:
-            observation['evidence']=r.evidence('story-open-observe-'+record['key']+'-'+str(len(record['messages'])+1))
-            self.pending=(f,observation);return True,.25
-        previous,first=self.pending
-        if (f is previous or not 0<f.at-previous.at<=8 or f.raw_size!=previous.raw_size
-            or first['binding']!=observation['binding'] or max(abs(first['target'][k]-target[k]) for k in ('x','y'))>8):
-            self.pending=None;return True,.25
         # All source/target checks have completed. Reserve BEFORE any message.
         observation['evidence']=r.evidence('story-open-send-'+record['key']+'-'+str(len(record['messages'])+1))
         message=dict(id=uuid.uuid4().hex,status='reserved',reserved_at=time.time(),source=source,
-                     observations=[first,observation],action='补发尚未响应的免费观看入口 '+record['key']+' #'+str(len(record['messages'])+1))
+                     observations=[observation],recognition_policy='single_current_observation',action='补发尚未响应的免费观看入口 '+record['key']+' #'+str(len(record['messages'])+1))
         record['messages'].append(message);self.pending=None;r.save()
         try:r.action(message['action'],target)
         except Exception as exc:

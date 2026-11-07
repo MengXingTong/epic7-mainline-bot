@@ -39,7 +39,7 @@ class SpiritAltarNoticeTests(unittest.TestCase):
     def test_original_weak_word_is_preserved_two_independent_purpose_reads(self):
         f=current();f.words[2].update(text='请朵集可用于英雄觉醒',score=.976)
         ocr=Mock(side_effect=[([['可用于英雄觉醒',.996]],None),([['可用于英雄觉醒',.997]],None)])
-        strengthen_spirit_altar_purpose(f,ocr);self.assertEqual(ocr.call_count,2)
+        strengthen_spirit_altar_purpose(f,ocr);self.assertEqual(ocr.call_count,1)
         self.assertEqual(f.words[2]['score'],.976);self.assertEqual(f.words[2]['text'],'请朵集可用于英雄觉醒')
         self.assertEqual(f.words[-1]['score'],.996);self.assertEqual(tutorial_plan(f)['rule'],'spirit_altar_unlocked')
     def test_wrong_weak_ambiguous_or_missing_context_never_strengthens(self):
@@ -51,9 +51,9 @@ class SpiritAltarNoticeTests(unittest.TestCase):
         f=current();f.words[2].update(text='购买觉醒材料',score=.99);ocr=Mock();strengthen_spirit_altar_purpose(f,ocr);ocr.assert_not_called()
     def test_purpose_without_current_crop_provenance_is_not_a_free_close(self):
         f=current();f.words[2].update(text='可用于英雄觉醒',x=838);self.assertIsNone(tutorial_plan(f))
-    def test_double_frame_once_and_no_progress_claim(self):
+    def test_current_known_control_sends_once_without_progress_claim(self):
         r=Mock();r.s={'active':None,'completed':{'old':{}},'attempted':{'old':{}}};r.evidence.return_value='synthetic'
-        c=TutorialController(r);c.step(current());r.action.assert_not_called();c.step(current());r.action.assert_called_once()
+        c=TutorialController(r);c.step(current());r.action.assert_called_once();c.step(current());r.action.assert_called_once()
         TutorialController(r).step(current());r.action.assert_called_once();self.assertEqual(r.s['completed'],{'old':{}});self.assertEqual(r.s['attempted'],{'old':{}})
 
 if __name__=='__main__':unittest.main()

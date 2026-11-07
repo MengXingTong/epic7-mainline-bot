@@ -32,10 +32,10 @@ class FreeTeamAutoConfigurationTests(unittest.TestCase):
                 self.assertIsNone(tutorial_plan(f),(i,mode))
         for text in ('购买','是否消耗','战斗失败','装备背包已满','额外扣除金币10','未知说明'):
             f=current();f.words+=frame([(text,800,350)]).words;self.assertIsNone(tutorial_plan(f))
-    def test_double_frame_durable_per_stage_single_send_progress_immutable(self):
+    def test_one_current_frame_durable_per_stage_single_send_progress_immutable(self):
         r,c=self.controller();old=copy.deepcopy(r.s);record=[]
         r.action.side_effect=lambda *a:record.append(copy.deepcopy(r.s))
-        f=current();f.at-=.25;c.step(f);c.step(f);r.action.assert_not_called();c.step(current());r.action.assert_called_once()
+        f=current();f.at-=.25;c.step(f);c.step(f);r.action.assert_called_once();c.step(current());r.action.assert_called_once()
         self.assertEqual(record[0]['tutorial']['auto_configurations']['E6-C3-S4']['status'],'reserved')
         self.assertEqual(r.s['tutorial']['auto_configurations']['E6-C3-S4']['status'],'sent')
         self.assertEqual(r.s['tutorial']['auto_configurations']['E6-C3-S4']['map_source'],old['verified'])
@@ -63,6 +63,6 @@ class FreeTeamAutoConfigurationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.dispatch(c)
         r.action.reset_mock();r.action.side_effect=None;self.dispatch(TutorialController(r));r.action.assert_not_called()
     def test_stale_frame_has_no_input(self):
-        r,c=self.controller();c.step(current());f=current();f.at=time.time()-8;c.step(f);r.action.assert_not_called()
+        r,c=self.controller();f=current();f.at=time.time()-8;c.step(f);r.action.assert_not_called()
 
 if __name__=='__main__':unittest.main()

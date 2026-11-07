@@ -93,6 +93,75 @@ class MainlineMaintenanceTests(unittest.TestCase):
             self.assertEqual(validate_maintenance(maintenance,profile,state),proof)
             (profile/'STOP').write_text('stop')
             with self.assertRaises(ValueError):validate_maintenance(maintenance,profile,state)
+    def routed_source(self,root):
+        request,state=self.setup_source(root)
+        request['settings']['start_policy']='current_screen'
+        old=copy.deepcopy(request);old.pop('mainline_maintenance');old['settings']['data_dir']=str(root/'old-cache')
+        atomic_json(root/'request.json',old)
+        receipt=dict(run_id=old['run_id'],target=old['target'],request_sha256=digest(root/'request.json'),
+            resolved_data_dir=str(root),history_mutated=False,
+            resolution=dict(schema=1,reason='selected_target_original_profile',previous_data_dir=old['settings']['data_dir'],
+                            resolved_data_dir=str(root),history_mutated=False))
+        atomic_json(root/'profile-resolution.json',receipt)
+        request['mainline_maintenance'].update(original_request_sha256=digest(root/'request.json'),
+            profile_resolution_sha256=digest(root/'profile-resolution.json'))
+        return request,state,receipt
+    def test_routed_current_run_uses_only_its_audited_effective_profile(self):
+        with tempfile.TemporaryDirectory() as tmp,patch('mainline_maintenance.process_is_alive',return_value=False):
+            root=Path(tmp).resolve();request,state,_=self.routed_source(root)
+            before={p:p.read_bytes() for p in root.glob('*.json')};protected=copy.deepcopy(state)
+            self.assertEqual(validate_maintenance(request,root,state),request['mainline_maintenance'])
+            atomic_json(root/'control.json',dict(run_id=request['run_id'],action='stop'))
+            self.assertEqual(validate_maintenance(request,root,state,before_activation=True),request['mainline_maintenance'])
+            self.assertEqual(state,protected)
+            for path,data in before.items():
+                if path.name!='control.json':self.assertEqual(path.read_bytes(),data)
+    def test_routed_loader_does_not_open_the_other_clients_cached_profile(self):
+        from assistant_config import load_theater_resume_request
+        with tempfile.TemporaryDirectory() as tmp,patch('mainline_maintenance.process_is_alive',return_value=False),patch('assistant_config.process_is_alive',return_value=False):
+            home=Path(tmp).resolve();run='b'*32;folder=home/'runs'/run;folder.mkdir(parents=True)
+            request,state,receipt=self.routed_source(folder)
+            original=json.loads((folder/'request.json').read_text())
+            original.update(run_id=run,home=str(home));atomic_json(folder/'request.json',original)
+            request.update(run_id=run,home=str(home))
+            receipt.update(run_id=run,request_sha256=digest(folder/'request.json'))
+            atomic_json(folder/'profile-resolution.json',receipt)
+            atomic_json(folder/'status.json',dict(mode='stopped',run_id=run))
+            atomic_json(folder/'control.json',dict(run_id=run,action='stop'))
+            atomic_json(home/'active-run.json',dict(run_id=run,run_dir=str(folder),worker_pid=999))
+            request['mainline_maintenance'].update(run_id=run,original_request_sha256=digest(folder/'request.json'),
+                stopped_status_sha256=digest(folder/'status.json'),profile_resolution_sha256=digest(folder/'profile-resolution.json'))
+            atomic_json(folder/'mainline-maintenance-request.json',request)
+            before={p:p.read_bytes() for p in home.rglob('*.json')}
+            self.assertEqual(load_theater_resume_request(run,home),request)
+            self.assertEqual(before,{p:p.read_bytes() for p in home.rglob('*.json')})
+            self.assertFalse(Path(original['settings']['data_dir']).exists())
+
+    def test_routed_maintenance_rejects_missing_changed_or_foreign_receipt(self):
+        changes=('missing','hash','run','target','request','mutated','nested_mutated','schema','reason',
+                 'previous','root','nested_root','settings')
+        for change in changes:
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp,patch('mainline_maintenance.process_is_alive',return_value=False):
+                root=Path(tmp).resolve();request,state,receipt=self.routed_source(root)
+                proof=request['mainline_maintenance']
+                if change=='missing':(root/'profile-resolution.json').unlink()
+                elif change=='hash':proof['profile_resolution_sha256']='bad'
+                elif change=='settings':request['settings']['fast_mode']=False
+                else:
+                    if change=='run':receipt['run_id']='foreign'
+                    elif change=='target':receipt['target']=dict(client='mumu',serial='foreign')
+                    elif change=='request':receipt['request_sha256']='foreign'
+                    elif change=='mutated':receipt['history_mutated']=True
+                    elif change=='nested_mutated':receipt['resolution']['history_mutated']=True
+                    elif change=='schema':receipt['resolution']['schema']=2
+                    elif change=='reason':receipt['resolution']['reason']='unverified'
+                    elif change=='previous':receipt['resolution']['previous_data_dir']='foreign'
+                    elif change=='root':receipt['resolved_data_dir']='foreign'
+                    elif change=='nested_root':receipt['resolution']['resolved_data_dir']='foreign'
+                    atomic_json(root/'profile-resolution.json',receipt)
+                    proof['profile_resolution_sha256']=digest(root/'profile-resolution.json')
+                with self.assertRaises(ValueError):validate_maintenance(request,root,state)
+
     def test_exited_display_publish_failure_needs_explicit_diagnostic_hash_not_forged_stop(self):
         with tempfile.TemporaryDirectory() as tmp,patch('mainline_maintenance.process_is_alive',return_value=False):
             root=Path(tmp).resolve();request,state=self.setup_source(root)

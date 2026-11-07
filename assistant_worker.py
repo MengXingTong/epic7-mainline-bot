@@ -6,7 +6,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 sys.path.insert(1,str(Path(__file__).resolve().parent/'vendor'))
 from ui_text import ChineseArgumentParser,error_text,scene_name
 from assistant_config import CODE_ROOT,atomic_json,read_json,validate_run,reserve_abyss_entry
-from task_blockers import TaskAttention
+from task_blockers import TaskAttention,EntryPreparationDeferred
 from task_timing import TransitionPacer,next_delay,ScreenStabilityGate,needs_stability_wait,ObservationCycle
 from pc_backend import PcSafetyError,InputBusy,FrameExpired,NavigationFrameExpired,NavigationInputDeferred
 
@@ -142,11 +142,15 @@ def capture_fresh(capture,control,clock=time.monotonic,blank_budget=10):
 
 
 class PlanningFrameGate:
-    """Recapture stale PC frames only BEFORE planning, journaling or dispatch."""
+    """Recapture stale frames on every adapter BEFORE planning or journaling."""
     def __init__(self):self.reset()
     def reset(self):self.expired=0
-    def ready(self,backend):
-        if backend is None:return True
+    def ready(self,backend,frame=None):
+        captured_at=getattr(frame,'at',None)
+        if captured_at is not None and not 0<=time.time()-captured_at<=5:
+            self.expired+=1
+            return False
+        if backend is None:self.reset();return True
         try:backend.ensure()
         except FrameExpired:
             self.expired+=1
@@ -158,27 +162,17 @@ def discover(settings):
     api=Win32Api();targets=[]
     for title in ('第七史诗','第七史詩','Epic Seven'):
         for s in api.windows('',title):
-            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · 进程编号 {s.pid} · {s.width}×{s.height}'))
+            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · 进程 {s.pid} · 窗口 {s.hwnd:X} · {s.width}×{s.height}'))
+    targets=list({t['hwnd']:t for t in targets}.values())
     from launcher import find_adb
     cfg=settings.setdefault('mumu',{})
     adb=find_adb(cfg.get('adb',''))
     if adb:
         cfg['adb']=str(adb)
-        def devices():
-            out=subprocess.run([str(adb),'devices'],capture_output=True,timeout=8,creationflags=subprocess.CREATE_NO_WINDOW)
-            return [p[0] for line in out.stdout.decode('utf-8',errors='replace').splitlines()[1:] if len(p:=line.split())>=2 and p[1]=='device']
-        serials=devices()
-        if not serials:
-            # Local MuMu default only; no network/port scan or arbitrary remote ADB.
-            serial=cfg.get('serial') or '127.0.0.1:16384'
-            subprocess.run([str(adb),'connect',serial],capture_output=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW)
-            serials=devices()
-        for serial in serials:
-            if cfg.get('serial') and serial!=cfg['serial']:continue
-            package=cfg.get('package','com.stove.epic7.google')
-            out=subprocess.run([str(adb),'-s',serial,'shell','pm','path',package],capture_output=True,timeout=5,creationflags=subprocess.CREATE_NO_WINDOW)
-            if out.returncode or not out.stdout.strip().startswith(b'package:'):continue
-            targets.append(dict(client='mumu',serial=serial,package=package,label='MuMu · '+serial+' · 后台调试连接'))
+        from mumu_discovery import discover_mumu
+        mumu,warnings=discover_mumu(adb,cfg)
+        targets.extend(mumu)
+        settings['_discovery_warnings']=warnings
     return targets
 
 
@@ -213,7 +207,8 @@ def abyss_run(request,control):
     bank=TemplateBank(CODE_ROOT/'assets/abyss' if (CODE_ROOT/'portable.json').exists() else CODE_ROOT/'.local/assistant/abyss-assets')
     if not bank.entries and not settings['observe']:raise RuntimeError('缺少本机深渊识别模板，已停止；不会盲点或下载素材。')
     session=Session()
-    history_path=Path(request['home'])/'abyss-history.json'
+    from assistant_instances import abyss_history_path
+    history_path=abyss_history_path(request)
     history=read_json(history_path,{'schema':1,'clients':{}})
     label=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
     from assistant_portable import enabled
@@ -324,7 +319,7 @@ def mainline_run(request,control):
     if target['client']=='mumu':
         cfg.update(settings['mumu']);cfg.update(backend='mumu_adb',serial=target['serial'],package=target['package'])
     else:
-        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,viewport_mode='auto',authorization_mode='selected_target'))
+        cfg.update(backend='stove_pc',pc=dict(game_exe=target['exe'],window_title=target['title'],experimental_input_enabled=True,viewport_mode='auto',authorization_mode='selected_target',selected_window={'hwnd':target['hwnd'],'pid':target['pid'],'created':target['created'],'exe':os.path.normcase(os.path.abspath(target['exe']))}))
     config_file=Path(request['run_dir'])/'runtime-config.json';atomic_json(config_file,cfg)
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
     import runner
@@ -402,7 +397,7 @@ def mainline_run(request,control):
             if pacer.waiting(scene):
                 control.status('等待刚才的操作切换界面；不重复点击。',mode='run',scene=scene)
                 cycle.wait(control);continue
-            if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and not planning.ready(backend):
+            if scene not in ('battle','loading','result_transition','capacity_stop','resource_stop','unknown_dialog','defeat') and not planning.ready(backend,frame):
                 control.status('识别耗时导致画面过期，正在重新取图；尚未规划操作。',mode='recovering',scene=scene)
                 cycle.wait(control);continue
             before=getattr(r,'input_sequence',0)
@@ -413,7 +408,7 @@ def mainline_run(request,control):
             delay_scene='natural_resource_wait' if r.story.context and r.s.get('story_waiting_resource') else scene
             delay=next_delay(delay_scene,delay,acted)
             wins=count()-baseline
-            control.status(r.s.get('reason','剧情关卡运行中'),mode='run' if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning='\n'.join(filter(None,(getattr(r,'report_warning',''),getattr(r,'capture_warning','')))),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
+            control.status(r.s.get('reason','剧情关卡运行中'),mode=('waiting_evidence' if getattr(r,'observation_wait',None) else 'run') if keep else 'blocked',scene=classify(frame),wins=wins,total_completed=count(),stage=r.story.stage_label() or (r.s.get('active') or r.ticket or {}).get('key',''),warning='\n'.join(filter(None,(getattr(r,'report_warning',''),getattr(r,'capture_warning','')))),story_mode=r.story.book.get('mode') if r.story.context else '',farm_runs=r.story.book.get('farm_runs',0) if r.story.context else 0)
             if not keep:return
             if delay_scene in ('network_error','natural_resource_wait'):control.sleep(delay)
             else:cycle.wait(control)
@@ -423,6 +418,9 @@ def mainline_run(request,control):
             if exc.code not in ('flow','client_input','entry_not_sent'):r.ticket=None
             if exc.code=='flow':r.mode_since=time.time()
             pacer.reset();stability.reset();planning.reset();r.s.pop('attention',None);r.save()
+        except EntryPreparationDeferred as exc:
+            control.status(str(exc)+' 仅重新取图，尚未调用入场后端，无需手动继续。',mode='waiting_evidence',scene=r.s.get('screen',scene))
+            pacer.reset();stability.reset();planning.reset();cycle.wait(control)
         except NavigationInputDeferred as exc:
             control.status('普通界面点击已在按下前取消；'+str(exc)+' 等待空闲并重新取图核验，不需要手动继续。',
                            mode='waiting_input',scene=r.s.get('screen',scene),attention_code='')
@@ -464,20 +462,42 @@ def observe_mainline(request,control):
 def prepare_selected_profile(request,control):
     """No account OCR/menu navigation. Register first use only after a verified game frame."""
     settings=request['settings']
+    from assistant_config import HOME
+    from assistant_portable import registered_root,initialize_selected,register_existing
+    from assistant_instances import known_target_root
+    home=Path(request.get('home',HOME)).resolve()
+    base=Path(request.get('instance_base',os.environ.get('EPIC7_ASSISTANT_BASE',HOME))).resolve()
+    from assistant_instances import resolve_target_profile
+    resolved,routing=resolve_target_profile(settings,request['target'],base)
+    if (routing or request.get('profile_resolution')) and not request.get('user_selected_profile'):
+        raise RuntimeError('缺少开始指令；不切换原进度关联。')
+    settings.update(resolved)
+    known=known_target_root(request['target'],base)
+    if routing or request.get('profile_resolution'):
+        import hashlib
+        receipt=dict(run_id=request['run_id'],target=request['target'],resolution=routing or request['profile_resolution'],
+                     resolved_data_dir=settings['data_dir'],history_mutated=False)
+        original=Path(request['run_dir'])/'request.json'
+        if original.is_file():receipt['request_sha256']=hashlib.sha256(original.read_bytes()).hexdigest()
+        atomic_json(Path(request['run_dir'])/'profile-resolution.json',receipt)
+        # A slot's original managed profile stays registered. Per-client routes
+        # are separate and remember_target retains every old endpoint reference.
+        if registered_root(home) is None:register_existing(settings['data_dir'],home)
+        print(json.dumps({'kind':'profile','run_id':request['run_id'],'data_dir':settings['data_dir']},ensure_ascii=False),flush=True)
     if settings.get('data_dir'):
         from assistant_config import history_gate
         root,_=history_gate(settings)
+        if known is not None and known!=root.resolve():
+            raise RuntimeError('所选客户端已有不同原进度；不改用另一份记录绕过历史。')
         return root
     if not request.get('user_selected_profile'):raise RuntimeError('缺少开始指令；请重新打开新版界面。')
-    from assistant_config import HOME
-    from assistant_portable import registered_root,initialize_selected
     from runtime_paths import exclusive_profile
     from assistant_transport import UnifiedTransport
     from rapidocr_onnxruntime import RapidOCR
     import cv2,numpy as np
     from runner import Frame,classify
-    with exclusive_profile(HOME):
-        if registered_root() is not None:raise RuntimeError('已存在登记；重新打开软件读取原进度，不新建空记录。')
+    with exclusive_profile(home):
+        if registered_root(home) is not None:raise RuntimeError('已存在登记；重新打开软件读取原进度，不新建空记录。')
         transport=UnifiedTransport(settings,request['target'],control.check)
         control.status('正在读取当前游戏画面；不读取账号、不打开设置。',mode='checking')
         snap=capture_fresh(transport.capture,control);control.preview(snap.image)
@@ -504,7 +524,7 @@ def prepare_selected_profile(request,control):
                 verified_penguin=penguin_classify(penguin_observation(snap.image,ocr,snap.captured_at)).scene in ('penguin_lobby','penguin_sanctuary','penguin_forest','penguin_altar','penguin_dialog')
             if not (verified_dimension or verified_theater or verified_penguin):raise RuntimeError('首次使用请停在大厅、主线地图、已识别的次元探查页面、可核实剧目/集数的月光剧场列表或已核实的企鹅购买页面；没有创建进度或发送点击。')
         transport.ensure();control.check()
-        root,_=initialize_selected(True)
+        root,_=initialize_selected(True,home)
         settings.update(data_dir=str(root),portable_first_use=False)
         print(json.dumps({'kind':'profile','run_id':request['run_id'],'data_dir':str(root)},ensure_ascii=False),flush=True)
         return root
@@ -527,35 +547,44 @@ def acknowledge_previous_stop(root,request,control):
 def run_request(request):
     control=Control(request)
     try:
-        root,_=validate_run(request['settings'],request['target'],allow_reconcile=True)
-        from runtime_paths import exclusive_profile
-        if request['settings']['observe']:
-            # Independent observer never authorizes account navigation or writes state.
-            root.mkdir(parents=True,exist_ok=True)
-        else:
-            while True:
-                try:
-                    root=prepare_selected_profile(request,control);break
-                except PauseRun:control.paused()
-            validate_run(request['settings'],request['target'],allow_reconcile=True)
-        with exclusive_profile(root):
-            acknowledge_previous_stop(root,request,control)
-            while True:
-                try:
-                    if request['settings']['task']=='dimension':
-                        from dimension_worker import run as dimension_run
-                        dimension_run(request,control)
-                    elif request['settings']['task']=='theater':
-                        from theater_worker import run as theater_run
-                        theater_run(request,control)
-                    elif request['settings']['task']=='penguin':
-                        from penguin_worker import run as penguin_run
-                        penguin_run(request,control)
-                    elif request['settings']['task']=='abyss':abyss_run(request,control)
-                    elif request['settings']['observe']:observe_mainline(request,control)
-                    else:mainline_run(request,control)
-                    break
-                except PauseRun:control.paused()
+        from assistant_instances import exclusive_target
+        from assistant_config import HOME
+        base=Path(request.get('instance_base',os.environ.get('EPIC7_ASSISTANT_BASE',HOME))).resolve()
+        with exclusive_target(request['target'],base):
+            root,_=validate_run(request['settings'],request['target'],allow_reconcile=True)
+            from runtime_paths import exclusive_profile
+            if request['settings']['observe']:
+                # Independent observer never authorizes account navigation or writes state.
+                root.mkdir(parents=True,exist_ok=True)
+            else:
+                while True:
+                    try:
+                        root=prepare_selected_profile(request,control);break
+                    except PauseRun:control.paused()
+                validate_run(request['settings'],request['target'],allow_reconcile=True)
+            with exclusive_profile(root):
+                from assistant_instances import remember_target
+                if not request['settings']['observe']:remember_target(request['target'],root,request['home'])
+                acknowledge_previous_stop(root,request,control)
+                while True:
+                    try:
+                        if request['settings']['task']=='dimension':
+                            from dimension_worker import run as dimension_run
+                            dimension_run(request,control)
+                        elif request['settings']['task']=='theater':
+                            from theater_worker import run as theater_run
+                            theater_run(request,control)
+                        elif request['settings']['task']=='arena':
+                            from arena_worker import run as arena_run
+                            arena_run(request,control)
+                        elif request['settings']['task']=='penguin':
+                            from penguin_worker import run as penguin_run
+                            penguin_run(request,control)
+                        elif request['settings']['task']=='abyss':abyss_run(request,control)
+                        elif request['settings']['observe']:observe_mainline(request,control)
+                        else:mainline_run(request,control)
+                        break
+                    except PauseRun:control.paused()
         if control.last.get('mode') in ('starting','observe'):control.status('只读检查完成；未发送输入。',mode='done')
     except StopRun:control.status('已停止；没有关闭游戏或清除历史。',mode='stopped')
     except Exception as exc:
@@ -569,7 +598,7 @@ def main():
     args=ap.parse_args()
     if args.discover:
         settings=read_json(args.discover);targets=discover(settings)
-        print(json.dumps({'targets':targets,'mumu':settings.get('mumu',{})},ensure_ascii=False));return
+        print(json.dumps({'targets':targets,'mumu':settings.get('mumu',{}),'warnings':settings.get('_discovery_warnings',[])},ensure_ascii=False));return
     if not args.request:raise RuntimeError('必须提供本机私有任务请求文件。')
     run_request(read_json(args.request))
 

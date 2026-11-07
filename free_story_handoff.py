@@ -33,7 +33,7 @@ def source_handoff(state,historical,current,events,map_data,control):
         or original.get('entry_kind')!='story_only' or original.get('cost')!=0 or key in state['completed']
         or len(rows)!=1 or rows[0].get('status')!='sent' or rows[0].get('entry')!=original
         or rows[0].get('original_sha256')!=attempt_digest(original)
-        or any(active.get(k)!=original.get(k) for k in ('key','episode','chapter','stage','name','cost','start_epoch'))
+        or any(active.get(k)!=original.get(k) for k in ('key','episode','chapter','chapter_suffix','stage','name','cost','start_epoch'))
         or active.get('playback_observed_at') or active.get('story_seen') or active.get('victory_seen')
         or any((row.get('entry') or {}).get('key')==key for row in state.get('unresolved_entries',[]))
         or any(row.get('original_dispatch_id')==rows[0]['id'] for row in state.get('free_story_handoffs',[]))):return None
@@ -127,8 +127,6 @@ class StoryHandoffController:
         if source is None:self.pending=None;return None
         source['original_preflight_file_sha256']=sha
         point=(control['target']['x'],control['target']['y'])
-        if (self.pending is None or self.pending[0]!=source['original_dispatch_id'] or f.at<=self.pending[2]
-            or max(abs(x-y) for x,y in zip(point,self.pending[1]))>8 or time.time()-f.at>3):
-            self.pending=(source['original_dispatch_id'],point,f.at);return True,.25
+        if not 0<=time.time()-f.at<=3:return True,.25
         dispatch_handoff(r,source);self.pending=None
         return True,.25

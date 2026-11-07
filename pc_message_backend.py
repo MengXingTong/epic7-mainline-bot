@@ -28,7 +28,7 @@ class MessageWin32Api(Win32Api):
             self.last_unready_reason='窗口类型不在已验证范围内';return False
         if (q.width,q.height)!=(s.width,s.height):
             self.last_unready_reason='客户区尺寸发生变化';return False
-        rows=self.windows(s.exe,q.title)
+        rows=[row for row in self.windows(s.exe,q.title) if row.hwnd==s.hwnd]
         if len(rows)!=1 or rows[0]!=s:
             self.last_unready_reason='窗口重新核验不一致（实例、位置、尺寸或显示比例）';return False
         if self.target and self.target.identity()!=s.identity():

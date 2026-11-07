@@ -83,22 +83,23 @@ class TutorialTests(unittest.TestCase):
             self.assertIsNone(tutorial_plan(frame(extra)))
         f=frame();f.words.pop(0);self.assertIsNone(tutorial_plan(f))
         f=frame();f.words[0]['score']=.8;self.assertIsNone(tutorial_plan(f))
-    def test_needs_independent_fresh_target_and_durable_intent(self):
-        r,c=controller();f=frame();self.assertEqual(c.step(f),(True,.25));r.action.assert_not_called()
-        c.step(f);r.action.assert_not_called()
-        f=frame();f.at+=.01;snap=[];r.action.side_effect=lambda *a,**k:snap.append(copy.deepcopy(r.s))
-        c.step(f);r.action.assert_called_once();self.assertEqual(snap[0]['tutorial']['actions'][0]['status'],'reserved')
-        self.assertEqual(r.s['tutorial']['actions'][0]['status'],'sent');c.step(frame());r.action.assert_called_once()
+    def test_single_current_control_has_durable_intent_and_is_not_repeated(self):
+        r,c=controller();snap=[];r.action.side_effect=lambda *a,**k:snap.append(copy.deepcopy(r.s))
+        f=frame();c.step(f);r.action.assert_called_once()
+        self.assertEqual(snap[0]['tutorial']['actions'][0]['status'],'reserved')
+        self.assertEqual(r.s['tutorial']['actions'][0]['status'],'sent')
+        c.step(f);c.step(frame());r.action.assert_called_once()
     def test_persistence_or_send_failure_never_replays(self):
         for failure in ('save','action'):
-            r,c=controller();c.step(frame());getattr(r,failure).side_effect=OSError('failure')
+            r,c=controller();getattr(r,failure).side_effect=OSError('failure')
             with self.assertRaises(OSError):c.step(frame())
             if failure=='save':r.action.assert_not_called()
             else:self.assertEqual(r.s['tutorial']['actions'][0]['status'],'reserved')
     def test_new_controller_does_not_reset_prior_dispatch(self):
         r,c=controller();c.step(frame());c.step(frame());TutorialController(r).step(frame());r.action.assert_called_once()
-    def test_target_movement_or_stale_frame_must_reobserve(self):
-        r,c=controller();c.step(frame());f=frame();f.words[-1]['x']+=20;c.step(f);r.action.assert_not_called()
-        f.at=time.time()-10;c.step(f);r.action.assert_not_called()
+    def test_stale_frame_has_no_input_but_current_detected_position_needs_no_second_frame(self):
+        r,c=controller();f=frame();f.at=time.time()-10;c.step(f);r.action.assert_not_called()
+        f=frame();f.words[-1]['x']+=20;c.step(f);r.action.assert_called_once()
+        self.assertEqual(r.action.call_args.args[1]['x'],f.words[-1]['x'])
 
 if __name__=='__main__':unittest.main()

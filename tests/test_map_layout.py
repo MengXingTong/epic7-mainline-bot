@@ -69,20 +69,18 @@ class RoutingTests(unittest.TestCase):
         with patch.object(runner,'event'),patch.object(runner,'ROOT',Path('no-live-state-test')):return r.step(r.frame)
     def test_pending_attempt_cannot_mark_clear_or_skip_to_locked_next(self):
         f=map_frame();r=fake_runner(f);r.s['attempted']['E3-C6-S5']={'requested':True};before=copy.deepcopy(r.s)
-        with self.assertRaises(TaskAttention) as result:self.run_step(r)
-        self.assertEqual(result.exception.code,'current_stage_unresolved');r.action.assert_not_called()
+        self.assertTrue(self.run_step(r)[0]);self.assertNotIn('attention',r.s);r.action.assert_not_called()
         self.assertEqual(r.s['attempted'],before['attempted']);self.assertEqual(r.s['completed'],{})
     def test_old_completed_entry_without_live_proof_does_not_skip_current(self):
         r=fake_runner(map_frame());r.s['completed']['E3-C6-S5']={'proof':'old'}
-        with self.assertRaises(TaskAttention):self.run_step(r)
+        self.assertTrue(self.run_step(r)[0])
         r.action.assert_not_called()
     def test_unattempted_visible_current_stage_is_still_allowed_without_star_panel(self):
         r=fake_runner(map_frame());keep,_=self.run_step(r)
         self.assertTrue(keep);self.assertEqual(r.action.call_args.args[0],'未通关验证通过，准备战斗');self.assertEqual(r.ticket['key'],'E3-C6-S5')
     def test_cleared_stage_cannot_click_a_locked_successor(self):
         r=fake_runner(map_frame());r.map_ticket=Mock(return_value=({'key':'E3-C6-S5','stage':5},[{'stage':6,'lock_score':.96,'locked':True,'x':166,'y':416}],'已通关关卡星级'))
-        with self.assertRaises(TaskAttention) as result:self.run_step(r)
-        self.assertEqual(result.exception.code,'locked_next');r.action.assert_not_called()
+        self.assertTrue(self.run_step(r)[0]);self.assertNotIn('attention',r.s);r.action.assert_not_called()
     def test_cleared_stage_can_select_a_verified_unlocked_successor(self):
         r=fake_runner(map_frame());r.map_ticket=Mock(return_value=({'key':'E3-C6-S5','stage':5},[{'stage':6,'lock_score':.2,'locked':False,'completion':'unconfirmed','x':166,'y':416}],'已通关关卡星级'))
         keep,_=self.run_step(r);self.assertTrue(keep);self.assertEqual(r.action.call_args.kwargs['xy'],(166,416));self.assertIsNone(r.ticket)
@@ -97,5 +95,5 @@ class ReportedLayoutTests(unittest.TestCase):
         self.assertEqual({row['stage'] for row in rows if row['locked']},{6,7,8})
         r=fake_runner(f);r.s['attempted'][node['key']]={'requested':True}
         with patch.object(runner,'event'),patch.object(runner,'ROOT',Path('no-live-state-test')):
-            with self.assertRaises(TaskAttention):r.step(f)
+            self.assertTrue(r.step(f)[0])
         r.action.assert_not_called();self.assertEqual(r.s['completed'],{})

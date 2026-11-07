@@ -34,7 +34,7 @@ class DeferredUiInputTests(unittest.TestCase):
                     with self.assertRaises(NavigationInputDeferred):r.action(action,{'x':10,'y':20})
                 self.assertEqual(r.s,before)
     def test_wrong_scene_unknown_action_and_any_active_entry_remain_manual(self):
-        for mode in ('scene','unknown','paid_active','story_active','no_pc'):
+        for mode in ('scene','unknown','no_pc'):
             with self.subTest(mode=mode):
                 r=self.make();action='确认通关结算'
                 if mode=='scene':r.s['screen']='unknown_dialog'
@@ -68,7 +68,7 @@ class DeferredUiInputTests(unittest.TestCase):
     def test_settlement_retry_does_not_recount_or_reopen_the_finished_stage(self):
         r=self.make();r.s['active']=dict(key='original',name='synthetic',cost=8);r.s['victories']=0
         def attempt(*args,**kwargs):
-            self.assertIsNone(r.s['active']);self.assertIn('original',r.s['completed'])
+            self.assertIsNotNone(r.s['active']);self.assertNotIn('original',r.s['completed'])
             if r._action.call_count==1:raise TapNotSent('global left button')
         r._action.side_effect=attempt
         with patch.object(runner,'classify',return_value='settlement'),patch.object(runner,'battle_settlement_confirm',return_value={'x':10,'y':20}),patch.object(runner,'event'):

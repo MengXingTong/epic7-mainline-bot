@@ -64,8 +64,12 @@ class StoryOpenAckTests(unittest.TestCase):
         self.clock+=.3;f=f or frame();f.at=self.clock;self.r.frame=f;return self.r.step(f)
     def close_notice_chain(self):
         from test_tutorial_completed_notice import notice
-        self.chain_step(notice());self.chain_step(notice())
-        self.chain_step();self.chain_step()
+        from datetime import datetime,timezone
+        self.chain_step(notice())
+        # Set up an observed departure without also invoking the next map action.
+        self.clock+=.3;f=frame();f.at=self.clock;self.r.frame=f
+        self.add_event(dict(time=datetime.fromtimestamp(self.clock,timezone.utc).isoformat(timespec='seconds'),kind='screen',screen='map',stage=self.key))
+        self.r.last_mode='map';self.r.free_notices.observe_scene('map',f)
         return self.r.s['free_notice_dismissals']['occurrences'][-1]
     def test_full_production_notice_close_return_and_story_acceptance_chain(self):
         self.notice_chain_fixture();snapshots=[];self.r.save.side_effect=lambda:snapshots.append(copy.deepcopy(self.r.s))
@@ -96,11 +100,12 @@ class StoryOpenAckTests(unittest.TestCase):
         self.chain_step(notice());self.chain_step(notice());self.chain_step();self.chain_step();self.chain_step()
         self.assertEqual(self.r.action.call_count,2);self.unchanged()
 
-    def test_first_return_map_frame_waits_for_independent_notice_disappearance(self):
+    def test_first_known_return_map_can_continue_without_second_disappearance_frame(self):
         from test_tutorial_completed_notice import notice
-        self.notice_chain_fixture();self.chain_step(notice());self.chain_step(notice())
+        self.notice_chain_fixture();self.chain_step(notice())
         self.assertEqual(self.chain_step(),(True,.25));self.r.attention.assert_not_called()
-        self.assertEqual(self.record['messages'],[]);self.assertEqual(self.r.action.call_count,1)
+        self.assertEqual(len(self.record['messages']),1);self.assertEqual(self.r.action.call_count,2)
+        self.unchanged()
     def test_original_v1_notice_receipt_is_verified_without_rewriting_or_new_permission(self):
         self.notice_chain_fixture();notice=self.close_notice_chain()
         notice.pop('entry_context');notice.pop('disappearance_observations');before=copy.deepcopy(notice)
@@ -122,13 +127,13 @@ class StoryOpenAckTests(unittest.TestCase):
             'other_departure':lambda n:n.update(gone_scene='story'),
             'unknown_send':lambda n:n['messages'][0].update(status='unknown'),
             'not_sent':lambda n:n['messages'][0].update(status='not_sent'),
-            'same_frame':lambda n:n['messages'][0]['observations'][1].update(captured_at=n['messages'][0]['observations'][0]['captured_at']),
+            'before_source':lambda n:n['messages'][0]['observations'][0].update(captured_at=0),
             'weak_target':lambda n:n['messages'][0]['observations'][0]['target'].update(score=.979),
             'missing_image':lambda n:n['messages'][0]['observations'][0].update(evidence='evidence/missing.png'),
             'outside_image':lambda n:n['messages'][0]['observations'][0].update(evidence='../outside.png'),
             'changed_pixels':lambda n:n['messages'][0]['observations'][0].update(image_sha256='different'),
-            'weak_departure':lambda n:n['disappearance_observations'][1].update(captured_at=n['disappearance_observations'][0]['captured_at']),
-            'changed_departure':lambda n:n['disappearance_observations'][1].update(image_sha256='different')}
+            'weak_departure':lambda n:n['disappearance_observations'][0].update(captured_at=0),
+            'changed_departure':lambda n:n['disappearance_observations'][0].update(image_sha256='different')}
         for name,mutate in mutations.items():
             with self.subTest(name=name):
                 notice.clear();notice.update(copy.deepcopy(saved));mutate(notice)
@@ -178,8 +183,7 @@ class StoryOpenAckTests(unittest.TestCase):
         self.assertEqual(len(self.record['messages'][-1]['source']['free_notice_receipts']),2)
         self.assertEqual(self.r.action.call_count,4);self.unchanged()
         self.clock+=5
-        with self.assertRaises(TaskAttention) as exc:self.chain_step()
-        self.assertEqual(exc.exception.code,'story_open_unacknowledged');self.assertEqual(self.r.action.call_count,4)
+        self.chain_step();self.r.attention.assert_not_called();self.assertEqual(self.r.action.call_count,4)
     def test_notice_receipt_does_not_relax_paid_archived_or_wrong_run_entry_guard(self):
         self.notice_chain_fixture();self.close_notice_chain();original=copy.deepcopy(self.r.s)
         for mode in ('paid','archived','new_run','completed','playback'):
@@ -195,12 +199,14 @@ class StoryOpenAckTests(unittest.TestCase):
 
     def test_production_runner_map_step_uses_response_chain_without_reopening_entry(self):
         self.r.story_open_ack=self.controller
-        self.r.step(self.fresh(-.25));self.r.action.assert_not_called()
+        self.r.step(self.fresh(-.25));self.r.action.assert_called_once()
         self.r.step(self.fresh());self.r.action.assert_called_once();self.unchanged()
     def test_first_production_open_registers_awaiting_acceptance_before_send(self):
         r=fake_runner(frame());r.run_id='new-run';r.pc=None;r.cfg.update(serial='known',package='known')
         d=copy.deepcopy(self.r.map_ticket.return_value[0]);r.ticket=copy.deepcopy(d)
         before=[];r.save.side_effect=lambda:before.append(copy.deepcopy(r.s))
+        def fresh_target():r.frame=frame();return r.frame
+        r.capture=Mock(side_effect=fresh_target)
         r.open_story_node(d,runner.mainline_map_control(r.frame)['target'])
         record=next(iter(before[0]['story_open_acknowledgements'].values()))
         self.assertEqual(record['phase'],'awaiting_acceptance');self.assertEqual(record['run_id'],'new-run')
@@ -209,25 +215,23 @@ class StoryOpenAckTests(unittest.TestCase):
     def test_initial_register_is_before_send_and_never_completed(self):
         self.assertEqual(self.record['phase'],'awaiting_acceptance');self.assertEqual(self.record['messages'],[])
         self.unchanged()
-    def test_single_lost_message_resends_in_original_chain_only_after_two_frames(self):
+    def test_lost_free_ui_message_uses_one_current_frame_in_original_bounded_chain(self):
         snapshots=[];self.r.save.side_effect=lambda:snapshots.append(copy.deepcopy(self.r.s))
-        first=self.fresh(-.25);self.controller.step(first);self.controller.step(first);self.r.action.assert_not_called()
-        self.controller.step(self.fresh());self.r.action.assert_not_called()  # repeated first frame invalidated the pair
-        self.controller.step(self.fresh(.001));self.r.action.assert_called_once()
+        first=self.fresh(-.25);self.controller.step(first);self.r.action.assert_called_once()
+        self.controller.step(first);self.controller.step(self.fresh());self.r.action.assert_called_once()
         messages=self.record['messages'];self.assertEqual(len(messages),1);self.assertEqual(messages[0]['status'],'sent')
         before=[s for s in snapshots if s['story_open_acknowledgements'][self.original_dispatch['id']]['messages']][0]
         self.assertEqual(before['story_open_acknowledgements'][self.original_dispatch['id']]['messages'][0]['status'],'reserved')
-        self.assertEqual(len(messages[0]['observations']),2);self.unchanged()
+        self.assertEqual(len(messages[0]['observations']),1);self.unchanged()
     def test_original_reservation_never_allows_additional_messages(self):
         self.r.s['entry_dispatches'][self.key][0]['status']='reserved';self.pair();self.r.action.assert_not_called()
     def test_wait_for_ack_does_not_immediately_click_again(self):
         self.pair();self.pair();self.assertEqual(self.r.action.call_count,1);self.unchanged()
-    def test_maximum_two_extra_messages_then_explains_not_completed(self):
+    def test_bounded_free_ui_messages_then_observe_without_defeat_or_manual_attention(self):
         self.pair();self.record['messages'][0]['sent_at']-=10
         self.pair();self.record['messages'][1]['sent_at']-=10
-        with self.assertRaises(TaskAttention) as raised:self.pair()
-        self.assertEqual(raised.exception.code,'story_open_unacknowledged')
-        self.assertEqual(self.r.action.call_count,2);self.unchanged()
+        self.pair();self.r.attention.assert_not_called()
+        self.assertEqual(self.r.action.call_count,2);self.assertEqual(self.r.observation_wait['code'],'story_open_response');self.unchanged()
     def test_acceptance_scene_latches_without_completing(self):
         for scene in ack.ACCEPTED_SCENES:
             with self.subTest(scene=scene):
@@ -238,10 +242,11 @@ class StoryOpenAckTests(unittest.TestCase):
             with self.subTest(scene=scene):
                 self.record['phase']='awaiting_acceptance';self.controller.observe_scene(scene,self.r.frame)
                 self.assertEqual(self.record['phase'],'blocked');self.pair();self.r.action.assert_not_called()
-    def test_unknown_observation_is_zero_input_and_resets_pair(self):
-        self.controller.step(self.fresh(-.25));self.controller.observe_scene('unknown_dialog',self.r.frame)
-        self.controller.step(self.fresh());self.r.action.assert_not_called()
-        self.controller.step(self.fresh(.001));self.r.action.assert_called_once()
+    def test_unknown_current_page_is_zero_input_but_next_known_page_needs_no_pair(self):
+        f=self.fresh();self.controller.observe_scene('unknown_dialog',f)
+        with patch.object(runner,'classify',return_value='unknown_dialog'):
+            self.controller.step(f);self.r.action.assert_not_called()
+        self.controller.step(self.fresh());self.r.action.assert_called_once();self.unchanged()
     def test_completed_archived_paid_wrong_run_and_prior_entry_evidence_reject(self):
         state=copy.deepcopy(self.r.s)
         for mode in ('completed','archived','paid','run','playback','battle','defeat','outcome','other_reopen','history_hash'):
@@ -289,7 +294,8 @@ class StoryOpenAckTests(unittest.TestCase):
     def test_stale_detached_or_mismatched_geometry_never_resends(self):
         self.controller.step(self.fresh(-4));self.r.action.assert_not_called()
         detached=frame();self.controller.step(detached);self.r.action.assert_not_called()
-        self.controller.step(self.fresh(-.25));f=self.fresh();f.raw_size=(1045,588)
+        # Changing the client binding is still prohibited; no first positive input was sent.
+        f=self.fresh();f.raw_size=(1045,588)
         self.controller.step(f);self.r.action.assert_not_called()
     def test_window_lifetime_or_position_change_rejects(self):
         self.r.pc=Mock();self.r.pc.frame_window=WindowSnapshot(1,2,'game.exe',3,10,20,1600,900)

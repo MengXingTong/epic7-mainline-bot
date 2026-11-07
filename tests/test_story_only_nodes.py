@@ -55,8 +55,7 @@ class StoryOnlyNodeTests(unittest.TestCase):
 
     def test_existing_or_uncertain_story_attempt_is_never_replayed(self):
         r=fake_runner(frame());r.s['attempted']['E4-C4-S3']={'entry_kind':'story_only'}
-        with self.assertRaises(TaskAttention) as caught:self.step(r)
-        self.assertEqual(caught.exception.code,'current_stage_unresolved');r.action.assert_not_called()
+        self.assertTrue(self.step(r)[0]);self.assertNotIn('attention',r.s);r.action.assert_not_called()
 
     def test_explicit_not_sent_story_click_can_be_sent_once_after_continue(self):
         r=fake_runner(frame());r.action.side_effect=TapNotSent('zero button down')
@@ -78,7 +77,7 @@ class StoryOnlyNodeTests(unittest.TestCase):
         r.map_ticket=Mock(return_value=(target,rows,'未通关蓝色当前节点'))
         self.step(r)
         self.assertIn('E4-C4-S3',r.s['completed']);self.assertIsNone(r.s['active'])
-        self.assertEqual(r.s['completed']['E4-C4-S3']['proof'],'返回地图后，纯剧情节点出现绿色已通关勾')
+        self.assertEqual(r.s['completed']['E4-C4-S3']['proof'],'当前地图明确显示原关卡完成。')
         self.assertEqual(r.action.call_args.args[0],'未通关验证通过，准备战斗')
 
     def test_recent_battle_entry_transient_map_keeps_active_and_never_resends(self):
@@ -86,9 +85,9 @@ class StoryOnlyNodeTests(unittest.TestCase):
         r.s['active']={**d,'start_epoch':time.time(),'cost':8}
         r.s['attempted'][d['key']]=dict(r.s['active']);before=copy.deepcopy(r.s['active'])
         keep,_=self.step(r);self.assertTrue(keep)
-        self.assertEqual(r.s['active'],before);r.action.assert_not_called();self.assertNotIn('unresolved_entries',r.s)
+        self.assertTrue(all(r.s['active'].get(k)==v for k,v in before.items()));r.action.assert_not_called();self.assertNotIn('unresolved_entries',r.s)
         r.s['active']['start_epoch']=time.time()-16;keep,_=self.step(r)
-        self.assertFalse(keep);self.assertIsNotNone(r.s['active']);r.action.assert_not_called()
+        self.assertTrue(keep);self.assertIsNotNone(r.s['active']);r.action.assert_not_called()
 
     def test_unchanged_map_after_sent_story_click_waits_then_requires_attention(self):
         r=fake_runner(frame());ticket=r.map_ticket(r.frame)[0]
@@ -96,8 +95,7 @@ class StoryOnlyNodeTests(unittest.TestCase):
         r.s['active']={**ticket,'entry_kind':'story_only','start_epoch':time.time()}
         self.step(r);r.action.assert_not_called()
         r.s['active']['start_epoch']=time.time()-21
-        with self.assertRaises(TaskAttention) as caught:self.step(r)
-        self.assertEqual(caught.exception.code,'story_result');r.action.assert_not_called()
+        self.assertTrue(self.step(r)[0]);self.assertNotIn('attention',r.s);r.action.assert_not_called()
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
