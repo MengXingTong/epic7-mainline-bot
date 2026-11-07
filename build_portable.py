@@ -17,7 +17,7 @@ SOURCES+=('theater_core.py','theater_vision.py','theater_journal.py','theater_wo
 SOURCES+=('tutorial_core.py','tutorial_ocr.py','mainline_maintenance.py','story_reopen.py','free_story_handoff.py','mainline_story_results.py')
 SOURCES+=('tutorial_entry_handoff.py','tutorial_control_templates.py','tutorial_navigation.py','tutorial_team_dialog.py','tutorial_battle_confirmation.py')
 SOURCES+=('theater_directory.py','theater_ticket_ocr.py','theater_pending_confirmation.py')
-VERSION='1.4.12-preview'
+VERSION='1.4.13-preview'
 RELEASE_DATE='2026-11-07'
 
 
@@ -128,6 +128,10 @@ def build_update(package):
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.13 保留v1.4.12候选的功能修复，并修正远端CI测试夹具：聊天消失以可控时钟证明独立后继帧，
+相同时间戳仍拒绝；多开测试子进程按源码入口加载vendor。未降低生产帧时效或输入校验。
+v1.4.12候选因远端CI测试失败未公开；使用独立v1.4.13标签/附件，不覆盖该候选和既有发布。
 
 v1.4.12 修复AUTO开启的首次入场被战斗指南误拦；仅确认原唯一入场，不点不再显示、不重开。
 主线使用当前周期已知控件及地图通关/原锁定后继解锁事实推进，不把点击、等待或缺切页判作战败。

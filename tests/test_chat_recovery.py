@@ -43,6 +43,11 @@ class RecoveryTestCase(unittest.TestCase):
 
 
 class ChatRecoveryTests(RecoveryTestCase):
+    def observe_later(self,c,scene,f):
+        # A distinct post-send observation, independent of OS clock resolution.
+        f.at=c.active()['messages'][-1]['sent_at']+.01
+        with patch('chat_recovery.time.time',return_value=f.at+.01):c.observe_scene(scene,f)
+
     def test_native_close_durable_before_input_keeps_original_entry_then_proves_departure(self):
         f=chat();r=runner_for(f);before=copy.deepcopy(r.s);order=[]
         r.save.side_effect=lambda:order.append('save');r.pc.back.side_effect=lambda:order.append('back')
@@ -52,10 +57,19 @@ class ChatRecoveryTests(RecoveryTestCase):
         self.assertEqual(len(list(Path(self.tmp.name).glob('evidence/*.png'))),2)
         c.step(f);r.pc.back.assert_called_once();r.pc.tap.assert_not_called()
         f=make_frame([('关卡任务',500,400,140),('闯关成功',500,440,140)])
-        c.observe_scene('victory',f)
+        self.observe_later(c,'victory',f)
         self.assertIsNone(c.active());self.assertEqual(row['phase'],'closed')
         for key,value in before.items():self.assertEqual(r.s[key],value)
         r.capture.assert_not_called();r.ocr.assert_not_called()
+
+    def test_equal_timestamp_cannot_prove_departure_even_with_a_coarse_clock(self):
+        r=runner_for(chat());c=ChatRecoveryController(r);c.step(r.frame)
+        sent=c.active()['messages'][-1]['sent_at'];f=make_frame([('3/3',200,30,80)])
+        f.at=sent
+        with patch('chat_recovery.time.time',return_value=sent+.1):c.observe_scene('battle',f)
+        self.assertEqual(c.active()['phase'],'awaiting_disappearance')
+        self.observe_later(c,'battle',f);self.assertIsNone(c.active())
+        r.pc.back.assert_called_once()
 
     def test_android_close_uses_native_back_not_a_chat_coordinate(self):
         f=chat();r=runner_for(f);r.pc=None;r.adb=Mock();c=ChatRecoveryController(r)
@@ -63,7 +77,7 @@ class ChatRecoveryTests(RecoveryTestCase):
 
     def test_reappearing_panel_has_its_own_occurrence_not_a_run_lifetime_latch(self):
         r=runner_for(chat());c=ChatRecoveryController(r);c.step(r.frame)
-        c.observe_scene('battle',make_frame([('3/3',200,30,80)]))
+        self.observe_later(c,'battle',make_frame([('3/3',200,30,80)]))
         r.frame=chat();r._capture_pixels.return_value=(r.frame.image.copy(),r.frame.raw_size)
         c.step(r.frame)
         self.assertEqual(len(r.s['chat_recoveries']['occurrences']),2)

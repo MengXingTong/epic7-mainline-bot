@@ -71,7 +71,7 @@ class MultiWindowGuiTests(unittest.TestCase):
             script=base/'startup.py'
             script.write_text("""import sys,json,os
 from pathlib import Path
-sys.path.insert(0,sys.argv[1])
+sys.path[:0]=[sys.argv[1],str(Path(sys.argv[1])/'vendor')]
 base=Path(sys.argv[2]);identifier=sys.argv[3]
 os.environ['EPIC7_ASSISTANT_HOME']=str(base)
 import assistant_app as app
