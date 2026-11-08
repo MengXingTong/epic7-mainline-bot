@@ -10,7 +10,7 @@ from unittest.mock import patch
 import runner
 from entry_journal import can_enter
 from pc_backend import InputDeliveryError
-from story_core import team_entry_control, auto_enabled, read_stage
+from story_core import team_entry_control, read_stage
 from task_blockers import TaskAttention
 from test_map_layout import frame, fake_runner
 from test_story import make as story_runner
@@ -53,7 +53,7 @@ class TeamPreparationTests(unittest.TestCase):
         self.assertEqual(r.s['completed'],{});self.assertEqual(r.s['attempted']['old-failure'],old['old-failure'])
 
     def test_native_episode_party_missing_weak_duplicate_or_shifted_anchor_is_unknown(self):
-        for i in range(12):
+        for i in (0,1,2,3,4,5,6,7,9,10,11):
             for mode in ('missing','weak','duplicate','shifted'):
                 f=self.episode_party()
                 if mode=='missing':f.words.pop(i)
@@ -86,7 +86,6 @@ class TeamPreparationTests(unittest.TestCase):
         f=preparation();control=team_entry_control(f)
         self.assertEqual(control['kind'],'single_task')
         self.assertIs(control['target'],f.find(r'^进行任务$'))
-        self.assertFalse(auto_enabled(f))
         r=prepared_runner(f);step(r)
         self.assertEqual(r.action.call_count,1)
         self.assertEqual(r.action.call_args.args[1]['text'],'进行任务')
@@ -105,7 +104,7 @@ class TeamPreparationTests(unittest.TestCase):
         self.assertEqual(r.s['attempted']['old-failure'],{'outcome':'defeat','evidence':'preserve'})
 
     def test_missing_low_confidence_or_displaced_anchor_does_not_allow_entry(self):
-        for index in range(len(ANCHORS)):
+        for index in (0,1,2,3,4,6):  # Optional support occupancy is not an entry gate.
             for change in ('missing','low_score','moved'):
                 with self.subTest(index=index,change=change):
                     f=preparation()
@@ -117,11 +116,11 @@ class TeamPreparationTests(unittest.TestCase):
                     self.assertEqual(team_entry_control(f)['kind'],'unknown')
                     r.action.assert_not_called();self.assertNotIn('E1-C1-S2',r.s['attempted'])
 
-    def test_partial_hosted_page_cannot_fall_back_to_legacy_auto(self):
-        f=preparation([('AUTO',990,680)]);f.image[650:710,900:1095]=(0,200,0)
-        for remove in (False,True):
-            with self.subTest(remove=remove):
-                if remove:f.words.pop(0)
+    def test_partial_hosted_page_cannot_be_authorized_by_auto(self):
+        for auto in (False,True):
+            with self.subTest(auto=auto):
+                f=preparation([('AUTO',990,680)] if auto else [])
+                f.words.pop(0);f.image[650:710,900:1095]=(0,200,0)
                 r=prepared_runner(f);step(r);r.action.assert_not_called()
                 self.assertEqual(team_entry_control(f)['kind'],'unknown')
 
@@ -186,20 +185,22 @@ class TeamPreparationTests(unittest.TestCase):
             with self.assertRaises(TaskAttention):step(r)
             r.action.assert_not_called();self.assertNotIn('E1-C1-S2',r.s['attempted'])
 
-    def test_legacy_auto_off_is_enabled_before_any_entry_intent(self):
-        f=frame([('进行任务',1435,828),('队伍战斗力',392,805),('新关卡',1220,168),
-                 ('20/100',1267,831),('AUTO',990,680),('托管战斗',822,727),('托管战斗',1460,115)])
-        r=prepared_runner(f);step(r)
-        self.assertEqual(r.action.call_args.args[1]['text'],'AUTO')
-        self.assertNotIn('E1-C1-S2',r.s['attempted'])
-        f.image[650:710,900:1095]=(0,200,0);r.action.reset_mock();step(r)
-        self.assertEqual(r.action.call_args.args[1]['text'],'进行任务')
-        self.assertEqual(r.s['active']['team_entry_mode'],'auto_on')
+    def test_legacy_auto_state_does_not_delay_or_replace_the_single_entry(self):
+        for enabled in (False,True):
+            f=preparation([('AUTO',990,680)])
+            f.words=[w for w in f.words if w['text']!='辅助英雄']
+            if enabled:f.image[650:710,900:1095]=(0,200,0)
+            r=prepared_runner(f);step(r)
+            self.assertEqual(r.action.call_count,1)
+            self.assertEqual(r.action.call_args.args[1]['text'],'进行任务')
+            self.assertEqual(r.s['active']['team_entry_mode'],'single_task')
+            self.assertEqual(len(r.s['entry_dispatches']['E1-C1-S2']),1)
+            r.action.reset_mock();step(r);r.action.assert_not_called()
 
-    def test_green_portrait_without_auto_label_does_not_prove_auto_enabled(self):
+    def test_green_portrait_cannot_authorize_incomplete_preparation_layout(self):
         f=frame([('进行任务',1435,828),('队伍战斗力',392,805),('新关卡',1220,168),('20/100',1267,831)])
         f.image[650:710,900:1095]=(0,200,0)
-        self.assertFalse(auto_enabled(f));r=prepared_runner(f);step(r);r.action.assert_not_called()
+        self.assertEqual(team_entry_control(f)['kind'],'unknown');r=prepared_runner(f);step(r);r.action.assert_not_called()
 
     def test_story_uses_same_single_entry_layout_without_enabling_hosted_mode(self):
         f=preparation([('目标地区',1220,115)])

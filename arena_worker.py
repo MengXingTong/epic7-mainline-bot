@@ -2,7 +2,7 @@
 from dataclasses import asdict
 import time
 from arena_core import Reading,classify,norm,one
-from arena_journal import ArenaJournal
+from arena_journal import ArenaJournal,binding
 from abyss_core import Observation,Token
 from task_blockers import TaskAttention
 from task_timing import ObservationCycle
@@ -52,16 +52,25 @@ def read_observation(image,ocr,captured_at):
         from PIL import ImageEnhance
         names=[t for t in obs.tokens if obs.in_region(t,(.53,.065,.76,.11)) and t.score is not None and .90<=t.score<.98]
         if len(names)==1:
-            original=names[0];pad=original.h*.5;scores=[]
-            crop=image.crop((round(original.x-pad),round(original.y-pad),round(original.x+original.w+pad),round(original.y+original.h+pad)))
-            for contrast in (1.3,1.6):
-                part=ImageEnhance.Contrast(crop).enhance(contrast).resize((480,round(crop.height*480/crop.width)),Image.Resampling.BICUBIC)
-                rows,_=ocr(np.array(part)[:,:,::-1].copy())
-                if not rows or len(rows)!=1:break
-                box,text,score=rows[0]
-                if norm(text)!=norm(original.text) or score<.98:break
-                scores.append(float(score))
-            if len(scores)==2:obs.tokens.append(Token(original.text,original.x,original.y,original.w,original.h,source='arena_result_name_double_read',score=min(scores)))
+            original=names[0]
+            # The dim result HUD is already localized by this frame's detector.
+            # Re-detecting a 480px enlargement distorts small grey glyphs and
+            # repeats the expensive detector. Normalize this original field to
+            # the recognizer's 48px height instead; never borrow the entry name.
+            inside=(original.x>=image.width*.53 and original.y>=image.height*.065
+                    and original.x+original.w<=image.width*.76
+                    and original.y+original.h<=image.height*.11)
+            if inside and original.w>0 and original.h>0:
+                from PIL import ImageFilter
+                pad=original.h*.1
+                crop=image.crop((round(original.x-pad),round(original.y-pad),round(original.x+original.w+pad),round(original.y+original.h+pad)))
+                part=crop.filter(ImageFilter.UnsharpMask(radius=1,percent=150,threshold=3))
+                part=part.resize((max(1,round(part.width*48/part.height)),48),Image.Resampling.LANCZOS)
+                rows,_=ocr(np.array(part)[:,:,::-1].copy(),use_det=False,use_cls=False)
+                if rows and len(rows)==1:
+                    text,score=rows[0]
+                    if norm(text)==norm(original.text) and score>=.98:
+                        obs.tokens.append(Token(original.text,original.x,original.y,original.w,original.h,source='arena_result_name_field_read',score=float(score)))
         if not one(obs,'VICTORY',(.30,.25,.72,.44),.98):
             originals=[t for t in obs.tokens if obs.in_region(t,(.30,.25,.72,.44)) and t.score is not None and t.score>=.85]
             if len(originals)==1:
@@ -81,7 +90,7 @@ def read_observation(image,ocr,captured_at):
 
 def signature(reading):
     t=reading.target
-    return (reading.scene,reading.opponent,reading.stock,reading.cost,t.text if t else '',tuple(round(v,1) for v in t.center) if t else ())
+    return (reading.scene,reading.opponent,reading.stock,reading.cost,t.text if t else '')
 
 
 def run(request,control):
@@ -97,19 +106,25 @@ def run(request,control):
         if (Path(root)/'STOP').exists():raise StopRun()
     tr=UnifiedTransport(settings,request['target'],check);bound=tr.ensure()
     def capture():
-        if tr.ensure()!=bound:raise PcSafetyError('竞技场窗口/进程寿命/几何变化；停止，不自动重绑。')
-        return tr.capture()
-    j=ArenaJournal(root,request['run_id'],settings['arena_count'])
+        # UnifiedTransport already validates before AND after capture. Bind that
+        # verified snapshot to the original selection rather than querying ADB
+        # a third time. The send backend still rechecks freshness and its target.
+        snap=tr.capture()
+        if snap.binding!=bound:raise PcSafetyError('竞技场窗口/进程寿命/几何变化；停止，不自动重绑。')
+        return snap
     ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2)
-    cycle=ObservationCycle();previous=None;last_sent=None;unknown_since=None;selected=False;challenged=False
-    history=[a for a in j.state['actions'] if a['run_id']==request['run_id']]
-    last_entry=max((i for i,a in enumerate(history) if a['kind']=='entry'),default=-1)
-    tail=history[last_entry+1:]
-    selected=any(a['kind']=='select' and a['status']=='sent' for a in tail)
-    challenged=any(a['kind']=='challenge' and a['status']=='sent' for a in tail)
+    from arena_recovery import reconcile
+    resumed=reconcile(root,request,ocr,capture,control)
+    j=ArenaJournal(root,resumed or request['run_id'],settings['arena_count'])
+    j.controller_run_id=request['run_id']  # Actor provenance is distinct from the retained batch/quota.
+    j.maintenance_source=request.get('arena_maintenance')
+    cycle=ObservationCycle();last_captured_at=None;last_sent=None;unknown_since=None
     while True:
         try:
             cycle.begin();check();snap=capture_fresh(capture,control)
+            if last_captured_at is not None and snap.captured_at<=last_captured_at:
+                raise PcSafetyError('不是独立的新帧。')
+            last_captured_at=snap.captured_at
             obs=read_observation(snap.image,ocr,snap.captured_at)
             try:r=classify(obs)
             except TaskAttention as exc:
@@ -120,19 +135,23 @@ def run(request,control):
             control.status(f'NPC竞技场：已独立核实 {j.run["wins"]}/{j.run["requested"]} 把。',mode='run',scene=r.scene,wins=j.run['wins'],arena_requested=j.run['requested'])
             if j.remaining==0 and not j.run.get('pending_result'):
                 control.status(f'NPC竞技场已完成 {j.run["wins"]}/{j.run["requested"]} 把；没有追加下一把。',mode='done');return
-            kind=None
+            kind=None;evidence=None
             if j.active:
                 if r.scene in ('arena_battle','arena_result') and r.opponent!=j.active['opponent']:
                     raise TaskAttention('arena_opponent','当前对手与原入场不一致','不认领外来战斗或结果，不追加入场。')
                 if r.scene=='arena_battle':
-                    if not j.active['battle_evidence']:j.battle(j.evidence(snap,obs,r),snap.binding)
+                    if not j.active['battle_evidence']:
+                        evidence=j.evidence(snap,obs,r);j.battle(evidence,snap.binding)
                     if r.target and not any(a['kind']=='auto' and a.get('key')==j.active['key'] for a in j.state['actions']):kind='auto'
+                elif r.scene=='arena_team_warning':
+                    if j.team_warning_ready(r,snap.binding,snap.captured_at):kind='entry_confirm'
+                    else:control.status('原入场确认正在等待游戏接受；不重复确认、不重新开战。',mode='waiting_evidence')
                 elif r.scene=='arena_result':
-                    if previous and previous[0]==signature(r):
-                        j.complete(j.evidence(snap,obs,r),snap.binding)
-                        selected=False;challenged=False;previous=None
-                        cycle.wait(control);continue
-                    else:previous=(signature(r),snap.captured_at);cycle.wait(control);continue
+                    # This complete result is already a fresh successor to the
+                    # original entry and battle evidence. Persist the milestone,
+                    # then close its verified control on this same current frame.
+                    evidence=j.evidence(snap,obs,r);j.complete(evidence,snap.binding)
+                    kind='result_close'
                 elif r.scene not in ('arena_unknown',):
                     # A sent entry is never automatically repeated.
                     if time.monotonic()-j.active['entry_evidence']['captured_at']>15:
@@ -141,48 +160,74 @@ def run(request,control):
                 if r.scene in ('arena_lobby','arena_hub','arena_tab'):kind='navigate'
                 elif r.scene=='arena_npc':
                     if j.run.get('pending_result'):
-                        sig=('closed_result',signature(r))
-                        if previous and previous[0]==sig:
-                            j.acknowledge_close(j.evidence(snap,obs,r),snap.binding)
-                            previous=None;selected=False;challenged=False
-                        else:previous=(sig,snap.captured_at)
-                        cycle.wait(control);continue
-                    if not selected:kind='select'
-                    else:
+                        # One fresh, fully recognized list proves the prior
+                        # result disappeared. Save that fact BEFORE selecting
+                        # another opponent; this is not another entry or a win.
+                        evidence=j.evidence(snap,obs,r);j.acknowledge_close(evidence,snap.binding)
+                        if j.remaining==0:
+                            control.status(f'NPC竞技场已完成 {j.run["wins"]}/{j.run["requested"]} 把；没有追加下一把。',mode='done');return
+                    selected,challenged=j.navigation()
+                    # A challenge send owns the pending free page transition.
+                    # OCR name/coordinate jitter must not issue a second click.
+                    if j.free_navigation_reset_context(r,snap.binding):kind='select'
+                    elif challenged and (not selected or j.state['actions'].index(challenged)>j.state['actions'].index(selected)):
+                        pass
+                    elif not selected or selected['reading']['opponent']!=r.opponent:
+                        kind='select'
+                    elif (selected['status']=='sent' and selected['binding']==binding(snap.binding)
+                          and {'arena_npc_first_selected','arena_challenge_enabled'}.issubset(obs.visuals)):
                         challenge=one(obs,'挑战',(.43,.86,.56,.97),.98)
                         if challenge:
                             r=Reading('arena_npc',challenge,r.opponent);kind='challenge'
                 elif r.scene=='arena_team':
-                    if not challenged:raise TaskAttention('arena_source','缺少本次首位NPC选择链','请回到NPC对战列表再继续；不从外来队伍页直接开战。')
-                    kind='entry'
+                    if j.entry_chain_matches(r,snap.binding):kind='entry'
+                    else:
+                        if ('arena_native_back' in obs.visuals
+                            and j.return_to_npc_context(r,snap.binding,snap.captured_at)):
+                            # Current-screen starts can already be on a team page.
+                            # Return for a new list selection, without adopting
+                            # that team or treating missing navigation as defeat.
+                            r=Reading('arena_team',Token('原生返回',obs.width*.014,obs.height*.015,obs.width*.031,obs.height*.058,source='verified_native_back',score=1),r.opponent,r.stock,r.cost)
+                            kind='return_to_npc'
+                        else:
+                            control.status('NPC队伍页：等待可核实的列表返回/选人来源；尚未发送开战，不重发入场。',mode='waiting_evidence')
                 elif r.scene=='arena_result':
                     if j.run.get('pending_result'):kind='result_close'
             if kind:
+                if kind=='result_close' and not j.result_close_ready(snap.captured_at):
+                    # Sending is not acceptance. Reobserve this known result or
+                    # its independent list return, without killing the worker.
+                    cycle.wait(control);continue
                 sig=signature(r)
-                if last_sent and last_sent[0]==sig:
-                    previous=None
+                if kind not in ('result_close','return_to_npc') and last_sent and last_sent[0]==sig:
                     if time.monotonic()-last_sent[2]>12:raise TaskAttention('arena_no_transition','已发送控件尚未响应','不连点、不重发入场；保留原发送记录。')
                     cycle.wait(control);continue
-                if not previous or previous[0]!=(kind,sig):
-                    previous=((kind,sig),snap.captured_at);cycle.wait(control);continue
-                if snap.captured_at<=previous[1]:raise PcSafetyError('不是独立的新帧。')
-                if wait_for_input(control,tr,snap):previous=None;cycle.wait(control);continue
-                ev=j.evidence(snap,obs,r);ident=j.intent(kind,r,ev,snap.binding)
-                try:tr.tap(snap,r.target)
+                # Known controls use this cycle's current observation, never a
+                # mandatory matching second OCR. At most one input per capture;
+                # dispatch deduplication and all durable entry checks still apply.
+                if wait_for_input(control,tr,snap):cycle.wait(control);continue
+                if time.monotonic()-snap.captured_at>5:
+                    control.status('当前截图处理已超时；零输入，重新截图核实，不延长旧帧时效。',mode='waiting_evidence')
+                    cycle.wait(control);continue
+                if evidence is None:evidence=j.evidence(snap,obs,r)
+                if time.monotonic()-snap.captured_at>5:
+                    control.status('留证后截图已过期；未预存或发送动作，重新取图。',mode='waiting_evidence')
+                    cycle.wait(control);continue
+                ident=j.intent(kind,r,evidence,snap.binding)
+                try:
+                    if kind=='return_to_npc':tr.back(snap)
+                    else:tr.tap(snap,r.target)
                 except TapNotSent:
                     j.sent(ident,'not_sent');raise TaskAttention('arena_not_sent','本次输入明确未发送','保留意图，重新核对后处理；不会自动重复入场。')
                 except BaseException:
                     j.sent(ident,'unknown');raise
-                j.sent(ident,'sent');last_sent=(signature(r),kind,time.monotonic());previous=None;unknown_since=None
-                if kind=='select':selected=True
-                if kind=='challenge':challenged=True
+                j.sent(ident,'sent');last_sent=(signature(r),kind,time.monotonic());unknown_since=None
             elif r.scene=='arena_unknown':
-                previous=None
                 if unknown_since is None:unknown_since=time.monotonic()
                 if time.monotonic()-unknown_since>25:
                     j.evidence(snap,obs,r)
                     raise TaskAttention('arena_unknown','竞技场当前页面未完整识别','未知页面/弹层零输入，保留所有记录后等待适配。')
             else:unknown_since=None
             cycle.wait(control)
-        except PauseRun:previous=None;control.paused()
-        except TaskAttention as exc:previous=None;control.attention(exc);unknown_since=None
+        except PauseRun:control.paused()
+        except TaskAttention as exc:control.attention(exc);unknown_since=None

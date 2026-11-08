@@ -471,3 +471,30 @@ def strengthen_map_row_label(f,ocr):
         text=readings[0],scores=scores,captured_at=f.at,crop=[x1,y1,x2,y2],
         crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest(),anchor_text=word['text'],
         components=[copy.deepcopy(part) for part in parts])
+
+
+def strengthen_preparation_power_label(f,ocr):
+    """Separate the optional decorative up-arrow from the current power label.
+
+    One recognition-only current-field read, not full OCR, repeated voting,
+    OCR threshold lowering, a resource number or a hero identity read.
+    """
+    for label,region in (('准备战斗',(60,10,260,80)),('闯关成功',(1180,200,1380,255)),
+                         ('登场的敌人',(1180,330,1450,395)),('管理队伍',(25,815,200,899)),
+                         ('进行任务',(1300,770,1599,899))):
+        x1,y1,x2,y2=region
+        if len([w for w in f.words if w['text']==label and w['score']>=.98
+                and x1<=w['x']<=x2 and y1<=w['y']<=y2])!=1:return
+    if any(w['text']=='队伍战斗力' and w['score']>=.98 and 300<=w['x']<=560 and 770<=w['y']<=835 for w in f.words):return
+    sources=[w for w in f.words if re.fullmatch(r'[▲△▴]\s*队伍战斗力',w['text'])
+             and w['score']>=.85 and 300<=w['x']<=560 and 770<=w['y']<=835]
+    if len(sources)!=1:return
+    crop=f.image[787:827,347:473]
+    image=cv2.resize(crop,(round(crop.shape[1]*48/crop.shape[0]),48),interpolation=cv2.INTER_CUBIC)
+    rows,_=ocr(image,use_det=False,use_cls=False)
+    if not rows or len(rows)!=1 or len(rows[0])!=2:return
+    text,score=rows[0]
+    if text!='队伍战斗力' or score<.98:return
+    f.words.append(dict(text=text,score=float(score),x=410,y=807,
+        box=[[347,787],[473,787],[473,827],[347,827]],source='current_preparation_power_label_field_read',
+        original_ocr=copy.deepcopy(sources[0]),verification_scores=[float(score)]))

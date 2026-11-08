@@ -48,9 +48,9 @@ def _target(r,preparation):
         match=re.search(r'(\d+)\s*/\s*(\d+)',word['text']) if word and word['score']>=.90 else None
         control=team_entry_control(f)
         if (not match or int(match[1])!=active['cost'] or int(match[2])<int(match[1])
-            or control['kind']!=active.get('team_entry_mode') or control['kind'] in ('unknown','enable_auto')):
-            raise EntryPreparationDeferred('原入场费用/库存/自动队伍控件尚未通过独立新帧核验；未发送。')
-        return control['target'] if control['kind']=='single_task' else f.find('进行任务',(1300,750,1599,899))
+            or control['kind']!='single_task' or active.get('team_entry_mode') not in ('single_task','auto_on')):
+            raise EntryPreparationDeferred('原入场费用/库存/普通单次任务控件尚未通过独立新帧核验；未发送。')
+        return control['target']
     raise ValueError('未登记的首次入场操作，未发送。')
 
 

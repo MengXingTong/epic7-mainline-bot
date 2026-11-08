@@ -263,28 +263,81 @@ def remember_target(target, root, home):
     atomic_json(path, bindings)
 
 
-def abyss_history_path(request):
-    """Cross-slot reuse also references the existing Abyss ledger, never resets it."""
+def abyss_history_key(request,state):
+    """One identity contract for both history routing and the worker's bucket."""
+    profile_id=state.get('local_profile_id')
+    if profile_id:
+        if not isinstance(profile_id,str):raise ValueError('本地进度身份损坏；不创建替代深渊历史。')
+        label='local_profile|'+profile_id
+    else:
+        target=request['target']
+        value=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
+        from assistant_portable import enabled
+        portable=enabled()
+        if portable:
+            binding=state.get('pc_profile_binding',{})
+            if binding:value='account|'+binding['server']+'|'+binding['account_id']
+        label=('account' if portable else target['client'])+'|'+value
+    return hashlib.sha256(label.encode()).hexdigest()[:24]
+
+
+def _abyss_clients(path):
+    history=read_json(path)
+    if (not isinstance(history,dict) or history.get('schema')!=1
+        or not isinstance(history.get('clients'),dict)
+        or any(not isinstance(v,dict) or not isinstance(v.get('attempted'),dict)
+               or not isinstance(v.get('completed'),dict) for v in history['clients'].values())):
+        raise ValueError('深渊历史格式损坏；不覆盖或创建替代记录。')
+    return history['clients']
+
+
+def abyss_history_path(request,*,state=None):
+    """Resolve the exact persistent identity, not the slot's latest UI binding.
+
+    A slot can switch profiles while its multi-client history stays in place.
+    Never merge, copy, truncate or choose the newest of two real sources.
+    """
     current=Path(request['home']).resolve()
     base=request.get('instance_base',os.environ.get('EPIC7_ASSISTANT_BASE'))
     value=request.get('settings',{}).get('data_dir')
-    if not base or not value:
-        return current/'abyss-history.json'
-    root=Path(value).resolve()
+    if not base or not value:return current/'abyss-history.json'
+    root=_profile_path(value)
+    key=None;profile_identity=False
+    if request.get('target',{}).get('client') in ('mumu','pc'):
+        state=read_json(root/'state.json') if state is None else state
+        key=abyss_history_key(request,state);profile_identity=bool(state.get('local_profile_id'))
     from assistant_portable import registered_root
-    candidates=set()
+    candidates=set();matches=set()
     for _,home in homes(base):
-        ledger=home/'abyss-history.json'
+        ledger=(home/'abyss-history.json').resolve()
         if not ledger.exists():continue
+        clients=_abyss_clients(ledger)
         known=registered_root(home)
         if known is None:
             saved=read_json(home/'settings.json',{}).get('data_dir')
-            if saved:
-                known=Path(saved)
-                if not known.is_absolute():
-                    from assistant_config import CODE_ROOT
-                    known=CODE_ROOT/known
-        if known is not None and known.resolve()==root:candidates.add(ledger)
+            if saved:known=_profile_path(saved)
+        belongs=known is not None and known.resolve()==root
+        if belongs:candidates.add(ledger)
+        # Old endpoint hashes are not an account/profile identity. They cannot
+        # pull a different profile's history merely because the serial matches.
+        if key is not None and key in clients and (profile_identity or belongs):matches.add(ledger)
+    if len(matches)>1:
+        raise ValueError('同一进度身份存在多个深渊历史；不自动覆盖、合并或重建。')
+    if matches:return next(iter(matches))
+    # Compatibility for a unique original legacy ledger. Multiple actual
+    # candidates without identity proof remain ambiguous, never an empty reset.
     if len(candidates)>1:
-        raise ValueError('同一原进度存在多个深渊历史；不自动覆盖或重建。')
+        raise ValueError('同一原进度存在多个深渊历史且没有唯一身份对应项；不自动覆盖或重建。')
     return next(iter(candidates),current/'abyss-history.json')
+
+
+@contextmanager
+def exclusive_abyss_history(path,*,api=None):
+    """Whole-file writes must not race another profile bucket in this ledger."""
+    api=api or NamedLeases()
+    identity=os.path.normcase(str(Path(path).resolve()))
+    name='Local\\Epic7AbyssHistory-'+hashlib.sha256(identity.encode()).hexdigest()
+    handle=api.acquire(name)
+    if handle is None:raise RuntimeError('原深渊历史正在被另一个任务使用；不覆盖或创建替代记录。')
+    try:yield
+    finally:api.release(handle)

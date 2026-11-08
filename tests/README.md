@@ -32,7 +32,10 @@ A passed geometry matrix does not mean every monitor, GPU, DPI mode or game UI h
 
 ## 队伍准备页
 
-`test_team_preparation.py` 验证带AUTO与辅助英雄空位两类布局、仅普通单次入场、地图链/体力/历史/弹窗优先、关键落盘和发送不明防重；输入及状态保存均使用模拟对象。可通过 `EPIC7_TEAM_FIXTURES` 指向含 `team.png`、`team-ocr.json` 的本机目录回放报告画面，默认使用本机私有回放目录；缺少文件明确跳过，素材不随源码分发，不操作游戏。
+`test_preparation_auto_independence.py` 用纯生成页面覆盖五种已知准备布局及 AUTO 缺失/开关/坐标/置信度/重复变化，不调用设备或桌面。验证普通唯一入口、辅助英雄占位不构成门槛，未知布局/遮罩、资源/历史/落盘仍否决，并保留旧 `auto_on` 未调用准备计划的原记录。可通过 `EPIC7_PREPARATION_AUTO_FIXTURES` 指向仅本机的 `attachment-client-normalized.png` / `attachment-ocr.json` 回放反馈图，缺少时明确跳过；原图/OCR不随源码分发。
+
+
+`test_team_preparation.py` 验证当前完整准备布局独立于 AUTO 与辅助英雄占位、仅普通单次入场、地图链/体力/历史/弹窗优先、关键落盘和发送不明防重；输入及状态保存均使用模拟对象。可通过 `EPIC7_TEAM_FIXTURES` 指向含 `team.png`、`team-ocr.json` 的本机目录回放报告画面，默认使用本机私有回放目录；缺少文件明确跳过，素材不随源码分发，不操作游戏。
 
 `test_friendship_notice.py` 验证好感度提示只操作本帧关闭控件，包括其覆盖在带右下角“确认”的战斗结算页时；只有“获得的道具”“战斗结果”和唯一结算确认同时成立才忽略底层按钮，其他确认、资源、复活、容量与战败覆盖层继续拦截。私有保存画面仅做离线OCR回放，不随源码分发。
 

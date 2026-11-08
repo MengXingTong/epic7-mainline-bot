@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 from PIL import Image
-from pc_backend import PcSafetyError,InputBusy,TapNotSent
+from pc_backend import PcSafetyError,FrameExpired,InputBusy,TapNotSent
 from client_viewport import Viewport,pc_viewport,crop_viewport
 
 @dataclass
@@ -82,7 +82,8 @@ class UnifiedTransport:
 
     def _fresh(self,f):
         self.check()
-        if f is not self.frame or time.monotonic()-f.captured_at>5:raise PcSafetyError('画面已过期或已使用；不发送输入。')
+        if f is not self.frame:raise PcSafetyError('画面已使用或不是当前截图；不发送输入。')
+        if time.monotonic()-f.captured_at>5:raise FrameExpired('画面已过期；不发送输入。')
         if self.ensure()!=f.binding:raise PcSafetyError('观察后客户端位置或尺寸发生变化，已停止操作。')
         if f.input_tick is not None and self.input_tick()!=f.input_tick:raise PcSafetyError('检测到手动输入，当前画面校验已失效。')
 

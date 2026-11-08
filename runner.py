@@ -12,7 +12,7 @@ from runtime_paths import data_root, config_path
 from task_blockers import capacity_blocker,TaskAttention
 from task_overlays import rankup_splash,account_upgrade_notice_close,friendship_upgrade_notice_close,FRIENDSHIP_TITLES,battle_settlement_confirm,date_change_notice_close,chat_panel_visible,chat_panel_heading,top_right_skip_control,tutorial_completed_notice_close
 from map_identity import chapter_header,same_chapter,stage_key,stage_order,native_forward_chapter
-from mainline_map import CLEAR_PROOFS,row_markers,read_stage_rating,is_cleared,is_unlocked,clipped_story_completion,complete_map_row_labels
+from mainline_map import CLEAR_PROOFS,chapter_navigation_control,row_markers,read_stage_rating,is_cleared,is_unlocked,clipped_story_completion,complete_map_row_labels
 from story_core import map_info as legacy_map_info,exit_target as legacy_exit_target,clear_banner as legacy_clear_banner,region_cards as legacy_region_cards
 from story_core import team_entry_control
 from tutorial_core import tutorial_plan,TutorialController,chapter_reward_pending,owned_hero_selector_visible
@@ -174,6 +174,17 @@ def mainline_episode(f):
         match=re.fullmatch(r'Episode\s*(\d+)',word['text'],re.I)
         era=re.fullmatch(r'第\s*(\d+)\s*时代\s*Episode',word['text'],re.I)
         if match or era:rows.append(dict(episode=int((match or era)[1]),word=word,layout='era' if era else 'episode'))
+        else:
+            # Named Episodes use the same map, story and team contracts. The
+            # word '外传' in this exact header is not a different task mode.
+            import unicodedata
+            named=re.fullmatch(r'外传\s*Episode\s*:\s*(.+)',unicodedata.normalize('NFKC',word['text']),re.I)
+            if named and word['score']<.98:return None
+            if named:
+                from map_identity import named_episode
+                try:identity=named_episode(named[1])
+                except ValueError:continue
+                rows.append(dict(episode=identity,word=word,layout='named_episode'))
     return rows[0] if len(rows)==1 else None
 
 
@@ -311,6 +322,8 @@ class Runner:
         strengthen_owned_card_level(f,self.ocr)
         strengthen_preparation_entry_label(f,self.ocr)
         strengthen_preparation_cost(f,self.ocr)
+        from tutorial_ocr import strengthen_preparation_power_label
+        strengthen_preparation_power_label(f,self.ocr)
         strengthen_free_single_summon_label(f,self.ocr)
         strengthen_wishlist_close(f,self.ocr)
         strengthen_wishlist_count(f,self.ocr)
@@ -428,6 +441,15 @@ class Runner:
             if xy is not None:raise RuntimeError('跳过操作必须提供本帧已识别控件，禁止固定坐标。')
             word=self._known_skip_control(kind,word)
             if word is None:return False
+        chapter_proof=None
+        if kind=='完成本章后进入下一章':
+            d,rows,proof=self.map_ticket(self.frame)
+            target=chapter_navigation_control(self.frame,d,rows) if classify(self.frame)=='map' and proof in CLEAR_PROOFS else None
+            if xy is not None or not target or word!=target:return False
+            from ui_control_guard import verify_live_controls
+            chapter_proof=verify_live_controls(self,[target],'native-chapter-navigation')
+            if chapter_proof is None:return False
+            event('chapter_navigation_intent',target=target,stage=d['key'],proof=chapter_proof)
         x,y=xy if xy else (word['x'],word['y'])
         w,h=self.frame.raw_size; coords=[round(x*w/1600),round(y*h/900)]
         self.input_sequence=getattr(self,'input_sequence',0)+1
@@ -445,6 +467,9 @@ class Runner:
             from pc_backend import FrameExpired
             event('skip_control_cancelled',action=kind,reason='发送前即时复核已过期')
             raise FrameExpired('当前跳过观察已过期；未发送输入，重新读取当前帧。')
+        if chapter_proof and (not 0<=time.time()-self.frame.at<=5 or not 0<=time.time()-chapter_proof['captured_at']<=.75):
+            from pc_backend import FrameExpired
+            raise FrameExpired('章节控件复核已过期；未发送输入。')
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
         if guarded:self.save()  # Free skip intent/evidence was saved before input.
@@ -584,6 +609,9 @@ class Runner:
             self.s.update(status='正在恢复网络连接',reason='只点击已明确识别的网络重试，不是关卡重试；入场和通关记录保留')
             self.action('网络重试（非关卡重试）',f.find('点击重试',(500,550,1100,780))); return True,10
         if mode=='capacity_stop':
+            if getattr(self,'run_id',None):
+                from entry_preflight import observe as observe_entry_response
+                observe_entry_response(self,f,mode)
             b=capacity_blocker(w['text'] for w in f.words)
             return self.attention(b.code,b.title,b.reason)
         if mode=='resource_stop':
@@ -591,6 +619,11 @@ class Runner:
         if mode=='defeat':
             self.s.setdefault('stage_outcomes',[]).append(dict(outcome='defeat',at=now(),stage=(self.s.get('active') or {}).get('key'),evidence=self.evidence('explicit-defeat')))
             return self.stop('强度不足卡关','当前画面明确显示战败；不复活、不重试，保留现场和原记录')
+        if getattr(self,'run_id',None):
+            from entry_preflight import observe as observe_entry_response,step as continue_preflight
+            observe_entry_response(self,f,mode)
+            response=continue_preflight(self,f,mode)
+            if response is not None:return response
         if mode=='chat_panel':return self.chat_recovery.step(f)
         if mode=='chapter_reward_pending':
             return self.observe_progress_evidence('chapter_reward',dict(code='current_reward_fields',
@@ -609,6 +642,14 @@ class Runner:
             self.action('关闭日期变更通知，按游戏提示返回大厅',date_change_notice_close(f.words));return True,3
         if not getattr(self,'tutorial_controller',None):self.tutorial_controller=TutorialController(self)
         self.tutorial_controller.observe_scene(mode,f)
+        if mode in ('battle','new_player_tutorial') and getattr(self,'run_id',None) and hasattr(self,'cfg') and not self.cfg.get('new_account_tutorial',False):
+            plan=tutorial_plan(f) if mode=='new_player_tutorial' else None
+            if mode=='battle' or (plan and plan['rule']=='krau_story_basic'):
+                from battle_auto_control import step as battle_auto_step
+                response=battle_auto_step(self,f,mode)
+                if response is not None:return response
+                if mode=='new_player_tutorial':
+                    return self.observe_progress_evidence('battle_auto',dict(code='battle_auto',reason='普通单次战斗等待可核实的游戏自动控件或结果；不沿用教学基础攻击的敌人坐标兜底。'))
         if mode=='new_player_tutorial':
             result=self.tutorial_controller.step(f)
             if result is not None:return result
@@ -710,8 +751,9 @@ class Runner:
                 if nextrow and is_unlocked(nextrow) and not is_cleared(nextrow):
                     self.ticket=None; self.action('避开已通关关卡，选择下一关',xy=(nextrow['x'],nextrow['y'])); return True,3
                 if nextrow and not is_unlocked(nextrow):return self.observe_progress_evidence('next_locked',dict(code='next_locked',reason='当前关已完成，下一关仍锁定；继续读取实际解锁状态，不判失败。'))
-                if d['stage']>=10:
-                    self.ticket=None; self.action('完成本章后进入下一章',xy=(320,137)); return True,4
+                chapter_control=chapter_navigation_control(f,d,rows)
+                if chapter_control:
+                    self.ticket=None; self.action('完成本章后进入下一章',chapter_control); return True,.25
                 return self.observe_progress_evidence('next_stage',dict(code='next_stage',reason='当前关已完成，正在识别下一未锁节点或地区入口；不重复已完成关。'))
             if d.get('name_complete') is False:
                 return self.observe_progress_evidence('map_title',dict(code='map_title',reason='当前关名被OCR拆段，正在独立重读完整行；未导航或创建入场。'))
@@ -781,9 +823,7 @@ class Runner:
             if available<required: return self.attention('resource','体力不足',f'当前体力 {available} 小于消耗 {required}；手动处理后继续，没有打开兑换框。')
             self.s['stamina']=available
             control=team_entry_control(f)
-            if control['kind']=='unknown':return self.stop('安全暂停待修复','未明确识别AUTO控件或辅助英雄空位的普通单次任务布局，请确认当前队伍页')
-            if control['kind']=='enable_auto':
-                self.action('开启自动战斗',control['target']);return True,2
+            if control['kind']!='single_task':return self.stop('安全暂停待修复','未核实当前队伍准备页的完整布局与唯一普通单次任务入口；尚未入场，不以AUTO或辅助英雄占位作为条件')
             key=self.ticket['key']
             from entry_journal import can_enter,reserve_entry,finish_dispatch
             from pc_backend import TapNotSent
@@ -791,7 +831,7 @@ class Runner:
             a=dict(self.ticket,cost=required,stamina_before=available,started_at=now(),start_epoch=time.time(),team_entry_mode=control['kind'],team_entry_proof=control['proof'])
             dispatch=reserve_entry(self.s,key,a);self.s['active']=a
             self.s['reason']=f"已验证新关 {key}，本次入场只消耗体力 {required}，绝不兑换"
-            entry=control['target'] if control['kind']=='single_task' else f.find('进行任务',(1300,750,1599,899))
+            entry=control['target']
             try:
                 if getattr(self,'run_id',None):
                     from entry_preparation import dispatch_first_entry
@@ -817,6 +857,10 @@ class Runner:
         if mode in ('loading','result_transition'):
             if age>180: return self.observe_progress_evidence('scene_loading',dict(code='scene_loading',reason='仍在加载或结果过渡，尚无明确战败；继续观察。'))
             self.save_observation(); return True,4
+        if mode=='unknown' and getattr(self,'run_id',None):
+            # Unified runs never promote an unrecognized CG/narration to a
+            # centre click/hold. Wait for a real current control or map fact.
+            return self.observe_progress_evidence('unknown_scene',dict(code='unknown_scene',reason='当前画面尚无已核实控件，继续零输入观察；不套用旧CLI的CG点击或长按。'))
         # Full-screen CG: only during a recorded run, no popup labels, no battle HUD.
         a=self.s.get('active')
         if not self.cfg.get('new_account_tutorial',False) and a and age>=12 and time.time()-self.battle_seen>12 and time.time()-self.last_gesture>25 and self.unknown_gestures<2:

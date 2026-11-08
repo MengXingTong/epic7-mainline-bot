@@ -187,3 +187,40 @@ def complete_map_row_labels(words,*,frame=None):
                           source='current_same_row_label_components',label_components=components)
         result.append(merged)
     return result
+
+
+def chapter_navigation_control(f,selected,rows):
+    """Read native chapter navigation, never a resource entry or completion fact.
+
+    Chapters do not have a fixed stage count. A positively cleared current node
+    with no visible successor may inspect the native chapter route; absence of
+    a row alone is NOT a clear, and the resulting page must be identified anew.
+    """
+    from map_identity import chapter_header
+    fields,heading=chapter_header(f)
+    if (not selected or not is_cleared(selected) or not is_unlocked(selected)
+        or not fields or heading['score']<.98
+        or any(fields.get(k,'')!=selected.get(k,'') for k in ('chapter','chapter_suffix'))
+        or any(row.get('stage',0)>selected['stage'] for row in rows)):
+        return None
+    # The native header's right-facing chevron is a connected glyph, not a
+    # guessed (320,137) point or an arbitrary bright background patch.
+    x1,y1,x2,y2=300,115,337,158
+    tile=f.image[y1:y2,x1:x2]
+    if tile.shape[:2]!=(43,37):return None
+    white=np.uint8((tile.min(axis=2)>150)&((tile.max(axis=2)-tile.min(axis=2))<55))*255
+    count,labels,stats,centers=cv2.connectedComponentsWithStats(white)
+    candidates=[]
+    for i,(v,c) in enumerate(zip(stats[1:],centers[1:]),1):
+        if not (7<=v[2]<=23 and 12<=v[3]<=31 and 30<=v[4]<=250
+                and 3<=c[0]<=34 and 6<=c[1]<=31):continue
+        glyph=(labels==i)[v[1]:v[1]+v[3],v[0]:v[0]+v[2]]
+        # A > chevron has a rightward middle and leftward upper/lower arms.
+        ys,xs=np.nonzero(glyph);h=int(v[3]);bands=[xs[(ys>=a)&(ys<b)] for a,b in ((0,h*.3),(h*.35,h*.65),(h*.7,h))]
+        if (any(len(b)==0 for b in bands)
+            or float(np.mean(bands[1]))-max(float(np.mean(bands[0])),float(np.mean(bands[2])))<2):continue
+        candidates.append(c)
+    if len(candidates)!=1:return None
+    center=candidates[0];left=min(point[0] for point in heading['box'])
+    return dict(text=heading['text'],score=heading['score'],x=x1+float(center[0]),y=y1+float(center[1]),
+                box=[[left,y1],[x2,y1],[x2,y2],[left,y2]],source='native_chapter_heading_and_chevron')

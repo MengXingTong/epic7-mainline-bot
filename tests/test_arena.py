@@ -107,7 +107,7 @@ class ArenaWorkerTests(unittest.TestCase):
                 if phase[0]=='team':return Reading('arena_team',tok('战斗开始',.65,.92),name,12,1)
                 if phase[0]=='battle':return Reading('arena_battle',tok('A',.88,.05),name)
                 return Reading('arena_result',tok('确认',.9,.92),name)
-            def observation(*args):return Observation(1600,900,[tok('挑战',.5,.92)])
+            def observation(*args):return Observation(1600,900,[tok('挑战',.5,.92)],visuals={'arena_npc_first_selected','arena_challenge_enabled'})
             req={'run_id':'synthetic','settings':{'arena_count':2},'target':{},'run_dir':d}
             with patch('assistant_config.validate_run',return_value=(Path(d),{})),patch('assistant_transport.UnifiedTransport',Transport),patch('arena_worker.read_observation',observation),patch('arena_worker.classify',reading),patch('arena_worker.ObservationCycle'):
                 arena_worker.run(req,Control())

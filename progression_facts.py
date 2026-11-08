@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass,field
 from pathlib import Path
-from map_identity import same_chapter,stage_order
+from map_identity import same_chapter,stage_order,valid_stage_identity,episode_handoff
 from mainline_map import is_cleared,is_unlocked,row_markers
 
 
@@ -23,7 +23,7 @@ class MapProgressFact:
 def map_progress_fact(frame,entry,selected,rows):
     """Read the current map once; dispatch/playback/switch logs are not authority."""
     if not entry or not selected:return MapProgressFact()
-    if any(not isinstance(row.get(k),int) for row in (entry,selected) for k in ('episode','chapter','stage')):return MapProgressFact()
+    if not all(valid_stage_identity(row) for row in (entry,selected)):return MapProgressFact()
     same=same_chapter(entry,selected)
     if same:
         current=next((r for r in rows if r.get('stage')==entry.get('stage')),None)
@@ -55,8 +55,15 @@ def map_progress_fact(frame,entry,selected,rows):
     else:
         # Do not fabricate the old chapter's completion. A positively identified
         # later map may nevertheless continue from its new unlocked stage.
-        forward=(entry.get('episode')==selected.get('episode') and stage_order(selected)>stage_order(entry)
-                 and selected.get('stage')==1 and is_unlocked(selected) and selected.get('cyan',0)>=.055)
+        next_chapter=(entry.get('episode')==selected.get('episode') and stage_order(selected)>stage_order(entry)
+                      and selected.get('stage')==1)
+        # A newly visible named Episode is not the old chapter's stage 1. Keep
+        # the old active in the unresolved archive, never mark it completed.
+        lock_score=selected.get('lock_score')
+        handoff=(episode_handoff(entry,selected) and selected.get('locked') is False
+                 and type(lock_score) in (int,float) and 0<=lock_score<=.81)
+        forward=((next_chapter or handoff)
+                 and is_unlocked(selected) and selected.get('cyan',0)>=.055)
     if forward:
         return MapProgressFact(False,True,'当前已明确选中后继未锁节点；继续向前，不虚构上一关完成。',dict(source='current_forward_unlocked',target=copy.deepcopy(selected)))
     return MapProgressFact()

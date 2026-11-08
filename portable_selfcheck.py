@@ -12,13 +12,13 @@ def worker_check():
     import task_blockers,task_overlays,task_timing,mainline_map,story_core,windows_elevation
     from theater_vision import TheaterVision
     import penguin_core,penguin_vision,penguin_journal,penguin_worker
-    import progression_evidence,progression_facts,map_identity,entry_preparation
+    import progression_evidence,progression_facts,map_identity,entry_preparation,entry_preflight
     import runner,free_notices,story_open_ack,free_story_handoff,mainline_maintenance,mainline_story_results,story_reopen
     import tutorial_core,tutorial_ocr,tutorial_navigation,tutorial_entry_handoff
     import tutorial_control_templates,tutorial_team_dialog,tutorial_battle_confirmation
     import mumu_discovery,assistant_instances
-    import ui_control_guard,chat_recovery
-    import arena_core,arena_worker,arena_journal,arena_vision
+    import ui_control_guard,chat_recovery,battle_auto_control
+    import arena_core,arena_worker,arena_journal,arena_vision,arena_recovery
     import theater_core,theater_journal,theater_worker,theater_directory
     import theater_ticket_ocr,theater_pending_confirmation
     import dimension_core,dimension_journal,dimension_worker

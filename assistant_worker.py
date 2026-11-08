@@ -19,6 +19,12 @@ class Control:
         self.preview_warning=''
         self.last={'mode':'starting','status':'正在连接','scene':'—','wins':0,'task':request['settings']['task'],'client':request['target']['client']}
     def check(self):
+        maintenance=self.request.get('arena_maintenance')
+        if maintenance:
+            # A same-run local reload is not an invisible second worker. A GUI
+            # new Start or changed marker revokes this actor before more input.
+            current=read_json(Path(self.request['home'])/'active-run.json',{})
+            if current!=maintenance['active_marker']:raise StopRun()
         command=read_json(self.folder/'control.json',{})
         if command.get('run_id')!=self.run_id or command.get('action')=='stop':raise StopRun()
         if command.get('action')=='pause':raise PauseRun()
@@ -194,6 +200,14 @@ def read_abyss_observation(image,ocr,bank,captured_at):
 
 
 def abyss_run(request,control):
+    from assistant_instances import abyss_history_path,exclusive_abyss_history
+    _,state=validate_run(request['settings'],request['target'],allow_reconcile=True)
+    history_path=abyss_history_path(request,state=state)
+    with exclusive_abyss_history(history_path):
+        return _abyss_run_with_history(request,control,history_path,state)
+
+
+def _abyss_run_with_history(request,control,history_path,state):
     import copy
     from entry_journal import can_enter,finish_dispatch
     from pc_backend import TapNotSent
@@ -207,18 +221,9 @@ def abyss_run(request,control):
     bank=TemplateBank(CODE_ROOT/'assets/abyss' if (CODE_ROOT/'portable.json').exists() else CODE_ROOT/'.local/assistant/abyss-assets')
     if not bank.entries and not settings['observe']:raise RuntimeError('缺少本机深渊识别模板，已停止；不会盲点或下载素材。')
     session=Session()
-    from assistant_instances import abyss_history_path
-    history_path=abyss_history_path(request)
+    from assistant_instances import abyss_history_key
     history=read_json(history_path,{'schema':1,'clients':{}})
-    label=target['exe'] if target['client']=='pc' else target['serial']+'|'+target['package']
-    from assistant_portable import enabled
-    _,state=validate_run(settings,target,allow_reconcile=True)
-    if enabled():
-        binding=state.get('pc_profile_binding',{})
-        if binding:label='account|'+binding['server']+'|'+binding['account_id']
-        elif state.get('local_profile_id'):label='profile|'+state['local_profile_id']
-    key=hashlib.sha256((('account' if enabled() else target['client'])+'|'+label).encode()).hexdigest()[:24]
-    if state.get('local_profile_id'):key=hashlib.sha256(('local_profile|'+state['local_profile_id']).encode()).hexdigest()[:24]
+    key=abyss_history_key(request,state)
     ledger=history.setdefault('clients',{}).setdefault(key,{'attempted':{},'completed':{}})
     previous=None;stable=0;cooldown=0;cooldown_scene=None;dialog_stability=ScreenStabilityGate()
     cycle=ObservationCycle()

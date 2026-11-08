@@ -133,7 +133,7 @@ class LegacyScenes(unittest.TestCase):
 
 def synthetic_team(stage='3-7',stamina=50):
     rows=[]
-    for text,x,y in [(stage+'.目标剧情',1230,165),('目标地区',1230,115),('进行任务',1450,825),('队伍战斗力',420,805),('AUTO',990,680),(f'8/{stamina}',1320,828)]:
+    for text,x,y in [(stage+'.目标剧情',1230,165),('目标地区',1230,115),('进行任务',1450,825),('队伍战斗力',420,805),('AUTO',990,680),(f'8/{stamina}',1320,828),('准备战斗',148,42),('管理队伍',90,850),('托管战斗',1460,115),('托管战斗',820,718)]:
         rows.append(([[x-30,y-10],[x+30,y-10],[x+30,y+10],[x-30,y+10]],text,.999))
     image=runner.np.full((900,1600,3),50,runner.np.uint8);image[650:710,900:1095]=(0,150,0)
     return runner.Frame(image,rows)

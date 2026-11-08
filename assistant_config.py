@@ -171,7 +171,7 @@ def load_theater_resume_request(run_id, home=HOME):
             or request.get('run_id') != run_id or Path(request.get('run_dir', '')).resolve() != folder
             or Path(request.get('home', '')).resolve() != home
             or status.get('run_id') != run_id or not (status.get('mode')=='stopped' or
-                (status.get('mode')=='blocked' and request.get('settings',{}).get('task')=='mainline'))
+                (status.get('mode')=='blocked' and request.get('settings',{}).get('task') in ('mainline','arena')))
             or control.get('run_id') != run_id or control.get('action') != 'stop'):
         raise ValueError('原任务尚未确认停止或身份不一致；不重载、不换run。')
     if process_is_alive(active.get('worker_pid')):
@@ -182,8 +182,18 @@ def load_theater_resume_request(run_id, home=HOME):
         from arena_journal import ArenaJournal
         root,_=validate_run(settings,request['target'],allow_reconcile=True)
         if (root/'STOP').exists():raise ValueError('STOP仍否决竞技场重载。')
-        journal=ArenaJournal(root,run_id,settings['arena_count'])
+        if run_id not in read_json(root/'arena/state.json',{}).get('runs',{}):
+            raise ValueError('原竞技场批次不存在；维护重载不能新建空批次。')
+        journal=ArenaJournal(root,run_id,settings['arena_count'],persist=False)
         entry=journal.active
+        if status.get('mode')=='blocked':
+            own=[a for a in journal.state['actions'] if a['run_id']==run_id]
+            if (entry or any(v.get('pending_result') for v in journal.state['runs'].values())
+                or any(k not in journal.state['completed'] for k in journal.state['attempted'])
+                or status.get('scene') not in ('arena_npc','arena_team') or status.get('wins')!=journal.run['wins']
+                or status.get('arena_requested')!=journal.run['requested'] or not own
+                or own[-1]['kind'] not in ('select','challenge') or own[-1]['status']!='unknown'):
+                raise ValueError('原竞技场blocked不是可审计的入场前普通导航故障；不恢复未知资源入场。')
         if entry:
             rows=journal.state['entry_dispatches'].get(entry['key'],[])
             if entry['run_id']!=run_id or len(rows)!=1 or rows[0]['status']!='sent':

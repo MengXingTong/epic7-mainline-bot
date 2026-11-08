@@ -18,9 +18,16 @@ def _rect(word):
     return int(x1),int(y1),int(x2),int(y2)
 
 
-def _glyph(image,rect):
+def _glyph(image,rect,*,tutorial_gold=False):
     x1,y1,x2,y2=rect;tile=image[y1:y2,x1:x2].astype(np.int16)
-    return (tile.min(axis=2)>=120)&(tile.max(axis=2)-tile.min(axis=2)<=55)
+    white=(tile.min(axis=2)>=120)&(tile.max(axis=2)-tile.min(axis=2)<=55)
+    if not tutorial_gold:return white
+    # The known top-right tutorial skip uses gold, not the ordinary white
+    # controls. Keep the same glyph overlap thresholds and current OCR box;
+    # this is a colour profile, not an arbitrary bright-area tap permission.
+    blue,green,red=tile[:,:,0],tile[:,:,1],tile[:,:,2]
+    gold=(red>=120)&(green>=100)&(blue<=green*.85)&(red>=green)&(red<=green*1.8)
+    return white|gold
 
 
 def matching_control_pixels(before,after,controls):
@@ -29,7 +36,10 @@ def matching_control_pixels(before,after,controls):
     for word in controls:
         rect=_rect(word)
         if rect is None:return None
-        a=_glyph(before,rect);b=_glyph(after,rect);na=int(a.sum());nb=int(b.sum())
+        tutorial_gold=(word.get('text')=='跳过教学' and word.get('score',0)>=.98
+                       and rect[0]>=1300 and 0<=rect[1] and rect[3]<=90)
+        a=_glyph(before,rect,tutorial_gold=tutorial_gold)
+        b=_glyph(after,rect,tutorial_gold=tutorial_gold);na=int(a.sum());nb=int(b.sum())
         if min(na,nb)<35:return None
         overlap=int(np.count_nonzero(a&b));recall=overlap/na;precision=overlap/nb
         if min(recall,precision)<.90:return None

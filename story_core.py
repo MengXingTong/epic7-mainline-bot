@@ -118,25 +118,116 @@ def exit_target(f,clear_overlay=False):
     xs,ys=best[1].T
     return dict(x=min(1570,round(float(max(xs))+80)),y=min(710,round(float(np.median(ys)))),dots=len(xs))
 
-def auto_enabled(f):
-    auto=f.find(r'^AUTO$',(880,625,1100,730))
-    if not auto or auto['score']<.90:return False
-    hsv=cv2.cvtColor(f.image[650:710,900:1095],cv2.COLOR_BGR2HSV)
-    return np.count_nonzero((hsv[:,:,0]>30)&(hsv[:,:,0]<90)&(hsv[:,:,1]>90)&(hsv[:,:,2]>65))>800
-
 def team_entry_control(f):
-    """Public entry reader: highlighted setup always vetoes entry."""
+    """Read an ordinary single-entry layout, independently of preparation AUTO.
+
+    AUTO presence, position, confidence and state never authorize or veto entry.
+    Required hero setup/overlays still veto; battle AUTO is a separate UI flow.
+    """
     from tutorial_core import guided_team_slot_visible
+    # Known Skip is a free overlay control, never permission to click through
+    # to the otherwise fully readable resource-entry button beneath it.
+    if any(re.fullmatch(r'跳过教[学學]',w['text']) for w in f.words):
+        return dict(kind='unknown',target=None,proof='教学跳过遮罩仍在；先处理已核实的免费教学，不点击底层资源入口')
     if guided_team_slot_visible(f):
-        return dict(kind='unknown',target=None,proof='教学高亮配置空位仍可见；不向底层进行任务发送入场')
+        from tutorial_core import _guided_slot_candidates
+        # Native fixed-story parties can pulse several OPTIONAL empty slots.
+        # A gold rim alone is not a forced setup tutorial. Only this complete
+        # native layout + multiple visible slots disambiguates it;
+        # a single guided slot, setup text, or a partial layout still vetoes.
+        native=_native_story_team_target(f)
+        instructions=any(re.search(r'教学|点击|请选择|请配置|拖动',w['text']) for w in f.words)
+        if not (native and not instructions
+                and len(_guided_slot_candidates(f,detection_only=True))>=2):
+            return dict(kind='unknown',target=None,proof='教学高亮配置空位仍可见；不向底层进行任务发送入场')
     return _team_entry_layout(f)
+
+
+def _native_mission_glyphs(f,objectives):
+    """Three passive native mission diamonds, independent of objective wording."""
+    for objective in objectives:
+        y=round(objective['y']-4)
+        tile=f.image[y-17:y+18,1168:1209]
+        if tile.shape[:2]!=(35,41):return False
+        hsv=cv2.cvtColor(tile,cv2.COLOR_BGR2HSV)
+        gold=(hsv[:,:,0]>=10)&(hsv[:,:,0]<=40)&(hsv[:,:,1]>=85)&(hsv[:,:,2]>=100)
+        count=int(np.count_nonzero(gold))
+        if not 180<=count<=500:return False
+        ys,xs=np.nonzero(gold);widths=gold.sum(axis=1)
+        if (not 13<=float(xs.mean())<=26 or not 12<=float(ys.mean())<=24
+            or float(np.mean(widths[12:23]))-max(float(np.mean(widths[:5])),float(np.mean(widths[-5:])))<4):
+            return False
+    return True
+
+
+def _native_story_team_target(f):
+    """Fixed story party with one separate, non-starting hosted control.
+
+    The three displayed objectives are passive mission descriptions. Their
+    wording never requests configuring, spending, reviving or retrying heroes.
+    Only the ordinary single-task button is returned; map/title/cost/history
+    remain Runner and first-entry-dispatch obligations.
+    """
+    # Objectives describe optional achievements, not input instructions. Read
+    # both complete passive rows with their three native mission glyphs instead
+    # of maintaining a per-hero/per-survivor/per-chapter text allowlist.
+    objective=r'.{4,40}'
+    specs=[(r'准备战斗',(60,10,260,80),.98),
+           (r'故事队伍',(25,80,155,150),.98),
+           (r'故事队伍',(220,80,380,140),.98),
+           (r'闯关成功',(1180,200,1380,250),.98),
+           (objective,(1180,245,1550,290),.95),
+           (objective,(1180,290,1550,325),.95),
+           (r'登场的敌人',(1180,330,1450,395),.98),
+           (r'^[-−一·—–－]?\s*队伍战斗力$',(300,770,560,835),.98),
+           (r'管理队伍',(25,815,200,899),.98),
+           (r'托管战斗',(750,690,900,765),.98),
+           (r'进行任务',(1300,770,1599,899),.98)]
+    anchors=[]
+    for pattern,(x1,y1,x2,y2),score in specs:
+        words=[w for w in f.words if re.fullmatch(pattern,w['text'])
+               and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        if len(words)!=1 or words[0]['score']<score:return None
+        anchors.append(words[0])
+    if not _native_mission_glyphs(f,anchors[3:6]):return None
+    story=[w for w in f.words if w['text']=='故事' and w['score']>=.98
+           and 200<=w['x']<=1000 and 160<=w['y']<=350]
+    if (not story or any('辅助英雄' in w['text'] for w in f.words)
+        or sum(w['text']=='托管战斗' for w in f.words)!=1
+        or sum(w['text']=='进行任务' for w in f.words)!=1):return None
+    return anchors[-1]
+
+
+def _legacy_story_team_target(f):
+    """Known old story/defense party; empty mission panel, not preparation AUTO."""
+    specs=[(r'准备战斗',(60,10,260,80),.98),
+           (r'支线故事[1-9]队',(20,80,190,160),.98),
+           (r'没有可执行的',(1180,245,1550,290),.98),
+           (r'任务[。.]?',(1180,290,1550,325),.98),
+           (r'登场的敌人',(1180,330,1450,395),.98),
+           (r'可获得的奖励',(1180,540,1450,625),.98),
+           (r'[-−一·—–－]?\s*队伍战斗力',(300,770,560,835),.90),
+           (r'管理队伍',(25,815,200,899),.98),
+           (r'进行任务|战斗开始',(1300,770,1599,899),.98)]
+    anchors=[]
+    for pattern,(x1,y1,x2,y2),score in specs:
+        words=[w for w in f.words if re.fullmatch(pattern,w['text'])
+               and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        if len(words)!=1 or words[0]['score']<score:return None
+        anchors.append(words[0])
+    hosted=[w for w in f.words if w['text']=='托管战斗']
+    if (sum(w['text'] in ('进行任务','战斗开始') for w in f.words)!=1 or len(hosted)>1
+        or any(w['score']<.98 or not (750<=w['x']<=900 and 690<=w['y']<=765) for w in hosted)):
+        return None
+    return anchors[-1]
 
 
 def _team_entry_layout(f):
     """Read the preparation layout; hosted/repeat controls are never tap targets."""
-    unknown=dict(kind='unknown',target=None,proof='队伍页布局或自动战斗控件尚未明确识别')
+    unknown=dict(kind='unknown',target=None,proof='队伍准备页完整布局或唯一普通单次入口尚未核实；不以AUTO作为入场条件')
     from tutorial_core import owned_hero_selector_visible
     if owned_hero_selector_visible(f):return unknown
+    if sum(w['text'] in ('进行任务','战斗开始') for w in f.words)!=1:return unknown
     if f.find(r'^(确认|确定|確認|確定|取消)$'):return unknown
     if any(re.search(r'重复战斗|连续战斗|重复进行|托管次数|托管中',w['text']) for w in f.words):return unknown
     story_anchors=[
@@ -146,18 +237,26 @@ def _team_entry_layout(f):
         f.find(r'^故事$',(200,160,1000,350)),
         f.find(r'^闯关成功$',(1180,200,1380,250)),
         f.find(r'^完成故事$',(1180,245,1380,290)),
-        f.find(r'^1名以上英雄存活$',(1180,280,1450,325)),
+        f.find(r'^[1-4]名以上英雄存活$',(1180,280,1450,325)),
         f.find(r'^登场的敌人$',(1180,330,1450,395)),
         f.find(r'^[-−一·—–－]?\s*队伍战斗力$',(300,770,560,835)),
         f.find(r'^管理队伍$',(25,815,200,899)),
         f.find(r'^进行任务$',(1300,770,1599,899)),
     ]
-    if all(w and w['score']>=(.90 if index==8 else .95) for index,w in enumerate(story_anchors)) and not f.find(r'^AUTO$') and not f.any('托管战斗','辅助英雄'):
+    if all(w and w['score']>=(.90 if index==8 else .95) for index,w in enumerate(story_anchors)) and not f.any('托管战斗','辅助英雄'):
         return dict(kind='single_task',target=story_anchors[-1],
                     proof='已识别故事固定队伍、三项关卡任务与普通单次入口；不宣称已开启自动，仍需地图/标题/体力/历史链')
-    # The observed native Episode party has neither the old AUTO option nor
-    # an eligible support slot. This only identifies a SINGLE-entry button;
-    # Runner still validates map/name/resource/history and persists its intent.
+    native_story=_native_story_team_target(f)
+    if native_story:
+        return dict(kind='single_task',target=native_story,
+                    proof='已识别故事固定队伍、完整三项任务、独立托管控件和普通单次入口；未操作托管，不推断战斗内AUTO状态')
+    if f.find(r'^故事队伍$') and f.any('托管战斗'):
+        # A partial/changed native story page must not fall through to the
+        # unrelated legacy party branch or a hosted configuration overlay.
+        return unknown
+    # The native Episode party is identified by its complete preparation UI,
+    # not by AUTO or whether a support hero is present. Only a SINGLE-entry button
+    # is returned; Runner still validates map/name/resource/history and persists its intent.
     episode_specs=[
         (r'准备战斗',(60,10,260,80),.98),
         (r'Episode1队',(20,80,160,160),.98),
@@ -165,9 +264,8 @@ def _team_entry_layout(f):
         (r'Episode3队',(20,240,160,310),.98),
         (r'闯关成功',(1180,200,1380,250),.98),
         (r'完成故事',(1180,245,1380,290),.98),
-        (r'1名以上英雄存活',(1180,280,1450,325),.98),
+        (r'[1-4]名以上英雄存活',(1180,280,1450,325),.98),
         (r'登场的敌人',(1180,330,1450,395),.98),
-        (r'辅助英雄无法参与',(880,560,1115,650),.98),
         (r'[-−一·—–－]?\s*队伍战斗力',(300,770,560,835),.90),
         (r'管理队伍',(25,815,200,899),.98),
         (r'进行任务',(1300,770,1599,899),.98),
@@ -177,28 +275,34 @@ def _team_entry_layout(f):
         words=[w for w in f.words if re.fullmatch(pattern,w['text']) and w['score']>=score
                and x1<=w['x']<=x2 and y1<=w['y']<=y2]
         episode_anchors.append(words[0] if len(words)==1 else None)
-    if all(episode_anchors) and not f.find(r'^AUTO$') and not any('托管战斗' in w['text'] for w in f.words):
+    if all(episode_anchors) and not any('托管战斗' in w['text'] for w in f.words):
         return dict(kind='single_task',target=episode_anchors[-1],
-                    proof='已识别原生Episode三队标签、三项关卡任务、辅助英雄无法参与和普通单次入口；不推断战斗内AUTO状态')
-    empty_support=f.find(r'^辅助英雄$',(920,530,1095,625))
-    auto=f.find(r'^AUTO$',(880,625,1100,730))
-    if auto:
-        if auto['score']<.90 or empty_support:return unknown
-        if auto_enabled(f):return dict(kind='auto_on',target=None,proof='旧版AUTO标签及开启状态已核验')
-        return dict(kind='enable_auto',target=auto,proof='旧版AUTO控件可见，等待开启后重新核验')
-    if f.find(r'^AUTO$'):return unknown
-    anchors=[
-        f.find(r'^准备战斗$',(60,10,260,80)),
-        f.find(r'^托管战斗$',(1390,75,1535,150)),
-        f.find(r'^托管战斗$',(750,690,900,765)),
-        f.find(r'^[-−一·—–－]?\s*队伍战斗力$',(300,770,560,835)),
-        f.find(r'^管理队伍$',(25,815,200,899)),
-        empty_support,
-        f.find(r'^进行任务$',(1300,770,1599,899)),
+                    proof='已识别原生Episode三队标签、三项关卡任务和普通单次入口；AUTO与辅助英雄占位不作为入场条件，不推断战斗内AUTO状态')
+    legacy_story=_legacy_story_team_target(f)
+    if legacy_story:
+        return dict(kind='single_task',target=legacy_story,
+                    proof='已识别旧剧情队伍标签、完整空任务面板、敌人与奖励区及唯一普通入场控件；AUTO与辅助英雄占位不作为入场条件，未操作托管，不推断战斗内AUTO状态')
+    if f.find(r'^支线故事[1-9]队$'):return unknown
+    # The legacy hosted controls identify this layout but are NEVER targets.
+    # Optional AUTO and support occupancy are not evidence for resource entry.
+    specs=[
+        (r'准备战斗',(60,10,260,80)),
+        (r'托管战斗',(1390,75,1535,150)),
+        (r'托管战斗',(750,690,900,765)),
+        (r'[-−一·—–－]?\s*队伍战斗力',(300,770,560,835)),
+        (r'管理队伍',(25,815,200,899)),
+        (r'进行任务',(1300,770,1599,899)),
     ]
-    if not all(w and w['score']>=.90 for w in anchors):return unknown
+    anchors=[]
+    for pattern,(x1,y1,x2,y2) in specs:
+        words=[w for w in f.words if re.fullmatch(pattern,w['text'])
+               and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        if len(words)!=1 or words[0]['score']<.90:return unknown
+        anchors.append(words[0])
+    if sum(w['text']=='托管战斗' for w in f.words)!=2 or sum(w['text']=='进行任务' for w in f.words)!=1:
+        return unknown
     return dict(kind='single_task',target=anchors[-1],
-                proof='已识别无AUTO的辅助英雄空位布局和普通单次任务入口；未操作托管或确认战斗内自动开关')
+                proof='已识别准备标题、两处独立托管控件、队伍战斗力、管理队伍和唯一普通单次入口；AUTO与辅助英雄占位不作为入场条件，未操作托管或确认战斗内自动开关')
 
 def entry_cost(f):
     word=f.find(r'^\d+\s*/\s*\d+$',(1180,775,1400,890))
@@ -288,8 +392,7 @@ class StoryController:
             self.r.save();return True,30
         self.r.s.pop('story_waiting_resource',None)
         control=team_entry_control(f)
-        if control['kind']=='unknown':return self.wait('队伍页入场方式等待确认','未明确识别AUTO控件或辅助英雄空位的普通单次任务布局；请确认页面后继续。')
-        if control['kind']=='enable_auto':return self.act('开启剧情关卡原生自动战斗',control['target'])
+        if control['kind']!='single_task':return self.wait('队伍页入场方式等待确认','未核实当前队伍准备页的完整布局与唯一普通单次任务入口；不以AUTO或辅助英雄占位作为条件。')
         if control['kind']=='single_task':word=control['target']
         intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),team_entry_mode=control['kind'],proof='当前准备页精确关卡编号与体力；'+control['proof'],evidence=self.r.evidence('story-entry-'+stage['id']))
         dispatch=reserve_entry(self.book,intent['id'],intent);self.book['active']=intent

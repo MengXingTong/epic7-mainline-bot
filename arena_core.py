@@ -59,6 +59,21 @@ def classify(o):
         raise TaskAttention('arena_defeat','竞技场战败','保留入场与战败证据，不自动重试。')
     if any(w in text for w in ('不足','复活','购买','兑换','网络错误','连接中断')):
         raise TaskAttention('arena_resource','资源或风险提示','不购买挑战书、体力，不兑换、复活或确认未知提示。')
+    warning_specs=(('未配置英雄',(.42,.22,.59,.31)),
+        ('队伍内有未配置英雄的栏位。',(.30,.395,.70,.447)),
+        ('确定要用这个队伍开始战斗吗？',(.30,.435,.70,.485)),
+        ('点击不再显示按钮，今日内将不再显示弹窗，',(.25,.54,.75,.60)),
+        ('并开始战斗。',(.40,.585,.61,.64)),('取消',(.26,.69,.40,.80)),
+        ('确认',(.43,.69,.57,.80)),('不再显示',(.59,.69,.75,.80)))
+    warning=[one(o,label,region,.98) for label,region in warning_specs]
+    if (all(warning) and 'arena_team_warning_confirm' in o.visuals
+        and one(o,'新手竞技场',(.025,0,.22,.10),.98)
+        and all(sum(norm(t.text)==norm(label) for t in o.tokens)==1 for label in ('取消','确认','不再显示'))):
+        allowed={norm(t.text) for t in warning}
+        if not any(o.in_region(t,(.22,.20,.78,.80)) and norm(t.text) not in allowed for t in o.tokens):
+            # The blurred underlying opponent is not observed. The journal
+            # alone may bind this exact known dialog to its unique original entry.
+            return Reading('arena_team_warning',warning[-2])
     if 'arena_notice_modal' in o.visuals:return Reading()
     victory=one(o,'VICTORY',(.30,.25,.72,.44),.98)
     result=one(o,'战斗结果',(.73,.85,.85,.98),.98)

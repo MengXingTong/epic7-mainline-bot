@@ -113,7 +113,21 @@ def top_right_skip_control(words,*,tutorial=False):
     """Only a unique current exact label authorizes the shared chat/skip area."""
     # Even incomplete results cannot reuse a residual Skip token.
     result_labels={'clear','victory','关卡任务','闯关成功','战斗结果','获得的道具'}
-    if any(re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).casefold() in result_labels for w in words):return None
+    def normalized(w):return re.sub(r'[\W_]+','',unicodedata.normalize('NFKC',w['text'])).casefold()
+    # The preparation objective is not a result banner. Only a full known
+    # preparation layout distinguishes it; partial results keep their veto.
+    def anchor(label,bounds):
+        x1,y1,x2,y2=bounds
+        rows=[w for w in words if normalized(w)==label and w.get('score',0)>=.98
+              and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        return len(rows)==1
+    preparation=(tutorial and anchor('准备战斗',(60,10,260,80))
+        and anchor('可获得的奖励',(1150,535,1450,620))
+        and anchor('登场的敌人',(1180,330,1450,395))
+        and anchor('闯关成功',(1180,200,1450,285)))
+    if any(normalized(w) in result_labels and not
+           (preparation and normalized(w)=='闯关成功' and 1180<=w['x']<=1450 and 200<=w['y']<=285)
+           for w in words):return None
     if chat_panel_heading(words):return None
     label='跳过教学' if tutorial else '跳过'
     candidates=[w for w in words if re.sub(r'\s+','',unicodedata.normalize('NFKC',w['text']))==label]
