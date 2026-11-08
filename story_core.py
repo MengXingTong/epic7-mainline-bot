@@ -144,15 +144,29 @@ def team_entry_control(f):
 
 
 def _native_mission_glyphs(f,objectives):
-    """Three passive native mission diamonds, independent of objective wording."""
-    for objective in objectives:
-        y=round(objective['y']-4)
-        tile=f.image[y-17:y+18,1168:1209]
-        if tile.shape[:2]!=(35,41):return False
+    """Three native diamonds aligned to their current pixel centroids.
+
+    Text baseline and panel margins differ slightly between native layouts.
+    Locate the current glyph within the bounded mission gutter, then apply the
+    same count/colour/centroid/taper requirements to its centred 35x41 tile.
+    No OCR reread, text-specific permit or broad bright-area input fallback.
+    """
+    def mask(tile):
         hsv=cv2.cvtColor(tile,cv2.COLOR_BGR2HSV)
-        gold=(hsv[:,:,0]>=10)&(hsv[:,:,0]<=40)&(hsv[:,:,1]>=85)&(hsv[:,:,2]>=100)
-        count=int(np.count_nonzero(gold))
-        if not 180<=count<=500:return False
+        return (hsv[:,:,0]>=10)&(hsv[:,:,0]<=40)&(hsv[:,:,1]>=85)&(hsv[:,:,2]>=100)
+    for objective in objectives:
+        row=round(objective['y'])
+        search=f.image[row-21:row+14,1148:1208]
+        if search.shape[:2]!=(35,60):return False
+        gold=mask(search)
+        if not 180<=int(np.count_nonzero(gold))<=500:return False
+        ys,xs=np.nonzero(gold)
+        x=1148+round(float(xs.mean()));y=row-21+round(float(ys.mean()))
+        if not 1160<=x<=1200 or abs(y-row)>9:return False
+        tile=f.image[y-17:y+18,x-20:x+21]
+        if tile.shape[:2]!=(35,41):return False
+        gold=mask(tile)
+        if not 180<=int(np.count_nonzero(gold))<=500:return False
         ys,xs=np.nonzero(gold);widths=gold.sum(axis=1)
         if (not 13<=float(xs.mean())<=26 or not 12<=float(ys.mean())<=24
             or float(np.mean(widths[12:23]))-max(float(np.mean(widths[:5])),float(np.mean(widths[-5:])))<4):
@@ -254,17 +268,17 @@ def _team_entry_layout(f):
         # A partial/changed native story page must not fall through to the
         # unrelated legacy party branch or a hosted configuration overlay.
         return unknown
-    # The native Episode party is identified by its complete preparation UI,
-    # not by AUTO or whether a support hero is present. Only a SINGLE-entry button
-    # is returned; Runner still validates map/name/resource/history and persists its intent.
+    # Episode mission rows are passive achievement descriptions, not setup
+    # commands. Their text varies with stage: recognize the complete native
+    # three-diamond panel instead of requiring particular survivor/story text.
     episode_specs=[
         (r'准备战斗',(60,10,260,80),.98),
         (r'Episode1队',(20,80,160,160),.98),
         (r'Episode2队',(20,165,160,235),.98),
         (r'Episode3队',(20,240,160,310),.98),
         (r'闯关成功',(1180,200,1380,250),.98),
-        (r'完成故事',(1180,245,1380,290),.98),
-        (r'[1-4]名以上英雄存活',(1180,280,1450,325),.98),
+        (r'.{4,40}',(1180,245,1550,290),.95),
+        (r'.{4,40}',(1180,290,1550,325),.95),
         (r'登场的敌人',(1180,330,1450,395),.98),
         (r'[-−一·—–－]?\s*队伍战斗力',(300,770,560,835),.90),
         (r'管理队伍',(25,815,200,899),.98),
@@ -272,12 +286,21 @@ def _team_entry_layout(f):
     ]
     episode_anchors=[]
     for pattern,(x1,y1,x2,y2),score in episode_specs:
-        words=[w for w in f.words if re.fullmatch(pattern,w['text']) and w['score']>=score
+        words=[w for w in f.words if re.fullmatch(pattern,w['text'])
                and x1<=w['x']<=x2 and y1<=w['y']<=y2]
-        episode_anchors.append(words[0] if len(words)==1 else None)
-    if all(episode_anchors) and not any('托管战斗' in w['text'] for w in f.words):
+        episode_anchors.append(words[0] if len(words)==1 and words[0]['score']>=score else None)
+    hosted=[w for w in f.words if '托管战斗' in w['text']]
+    bottom=[w for w in hosted if w['text']=='托管战斗' and w['score']>=.98
+            and 750<=w['x']<=900 and 690<=w['y']<=765]
+    top=[w for w in hosted if w['text']=='托管战斗' and w['score']>=.98
+         and 1390<=w['x']<=1535 and 75<=w['y']<=150]
+    hosted_valid=(not hosted or (len(bottom)==1 and len(top)<=1 and len(hosted)==len(bottom)+len(top)))
+    if all(episode_anchors) and hosted_valid and _native_mission_glyphs(f,episode_anchors[4:7]):
         return dict(kind='single_task',target=episode_anchors[-1],
-                    proof='已识别原生Episode三队标签、三项关卡任务和普通单次入口；AUTO与辅助英雄占位不作为入场条件，不推断战斗内AUTO状态')
+                    proof='已识别原生Episode三队标签、三枚原生任务菱形及完整被动目标区、普通单次入口；不按成就文案配队、不操作独立托管控件，AUTO与辅助英雄占位不作为入场条件，不推断战斗内AUTO状态')
+    if any(f.find(r'^Episode'+str(n)+r'队$') for n in (1,2,3)):
+        # An incomplete Episode page cannot borrow hosted/other-party identity.
+        return unknown
     legacy_story=_legacy_story_team_target(f)
     if legacy_story:
         return dict(kind='single_task',target=legacy_story,

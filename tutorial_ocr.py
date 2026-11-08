@@ -498,3 +498,45 @@ def strengthen_preparation_power_label(f,ocr):
     f.words.append(dict(text=text,score=float(score),x=410,y=807,
         box=[[347,787],[473,787],[473,827],[347,827]],source='current_preparation_power_label_field_read',
         original_ocr=copy.deepcopy(sources[0]),verification_scores=[float(score)]))
+
+
+def strengthen_preparation_party_labels(f,ocr):
+    """One current original-field read only when a known party label is weak.
+
+    Preserve the complete original OCR in the replacement word; never reread a
+    complete field, vote twice, change its text, borrow old pixels or age-reset.
+    This strengthens layout identity, never a resource or hero-setup request.
+    """
+    import hashlib
+    import numpy as np
+    if getattr(f,'preparation_party_labels_read',False):return
+    for text,region in (('准备战斗',(60,10,260,80)),('闯关成功',(1180,200,1380,255)),
+                        ('登场的敌人',(1180,330,1450,395)),('进行任务',(1300,770,1599,899))):
+        x1,y1,x2,y2=region
+        rows=[w for w in f.words if w['text']==text and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        if len(rows)!=1 or rows[0]['score']<.98:return
+    labels=[]
+    for text,region in (('Episode1队',(20,80,160,160)),('Episode2队',(20,165,160,235)),('Episode3队',(20,240,160,310))):
+        x1,y1,x2,y2=region
+        rows=[w for w in f.words if w['text']==text and x1<=w['x']<=x2 and y1<=w['y']<=y2]
+        if len(rows)!=1:return
+        labels.append(rows[0])
+    f.preparation_party_labels_read=True
+    for source in labels:
+        if source['score']>=.98:continue
+        box=np.asarray(source.get('box'),dtype=float)
+        if box.shape!=(4,2) or not np.isfinite(box).all():continue
+        x1,y1=np.floor(box.min(axis=0)).astype(int)-2
+        x2,y2=np.ceil(box.max(axis=0)).astype(int)+3
+        if not (0<=x1<x2<=180 and 80<=y1<y2<=320):continue
+        crop=f.image[y1:y2,x1:x2]
+        if not crop.size:continue
+        image=cv2.resize(crop,(round(crop.shape[1]*48/crop.shape[0]),48),interpolation=cv2.INTER_CUBIC)
+        rows,_=ocr(image,use_det=False,use_cls=False)
+        if not rows or len(rows)!=1 or len(rows[0])!=2:continue
+        text,score=rows[0]
+        if text!=source['text'] or not .98<=score<=1:continue
+        original=copy.deepcopy(source)
+        source.update(score=float(score),source='current_preparation_party_label_field_read',original_ocr=original,
+                      verification_scores=[float(score)],captured_at=f.at,crop=[int(x1),int(y1),int(x2),int(y2)],
+                      crop_sha256=hashlib.sha256(crop.tobytes()).hexdigest())

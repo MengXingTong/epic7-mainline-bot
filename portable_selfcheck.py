@@ -17,7 +17,7 @@ def worker_check():
     import tutorial_core,tutorial_ocr,tutorial_navigation,tutorial_entry_handoff
     import tutorial_control_templates,tutorial_team_dialog,tutorial_battle_confirmation
     import mumu_discovery,assistant_instances
-    import ui_control_guard,chat_recovery,battle_auto_control
+    import ui_control_guard,chat_recovery,battle_auto_control,battle_settings
     import arena_core,arena_worker,arena_journal,arena_vision,arena_recovery
     import theater_core,theater_journal,theater_worker,theater_directory
     import theater_ticket_ocr,theater_pending_confirmation

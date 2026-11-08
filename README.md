@@ -1,16 +1,16 @@
 # 第七史诗 · 统一推进助手
 
-当前预览分享版：**v1.4.14-preview**。准备页不再依赖 AUTO 或辅助英雄空位；收录具名 Episode/可变章节推进、独立战斗自动、NPC 竞技场起步/首次确认及原记录路由修复（实验性）。更新前停止任务并关闭旧助手，保留并关联原账号进度，不能删除历史；PC 仍实验性。分享说明见 `docs/SHARE_README.md`，验证边界见 `docs/MAINLINE_VALIDATION_2026-11-08.md`。
+当前预览分享版：**v1.4.15-preview**。准备页不再依赖 AUTO 或固定成就文案；统一主线普通战斗维持 AUTO 开启、战斗速度 2×，已正确时不切换，未知状态不盲点。收录既有推进、NPC 竞技场及原记录路由修复（实验性）。更新前停止任务并关闭旧助手，保留并关联原账号进度，不能删除历史；PC 仍实验性。分享说明见 `docs/SHARE_README.md`，验证边界见 `docs/MAINLINE_VALIDATION_2026-11-08.md`。
 
 
-## 多个客户端同时运行（v1.4.14 预览版）
+## 多个客户端同时运行（v1.4.15 预览版）
 
 可以重复双击同一个 `Assistant.cmd`，分别打开 **助手 #1、#2、#3…**；不再因已有助手窗口而阻止第二个窗口。每个窗口选择不同的游戏客户端 / MuMu 实例，然后分别开始、暂停或停止。所有启动仍经过标准 UAC；不会自动批准授权或抢游戏焦点。
 
 - #1 沿用原 `.local/assistant`，其他编号使用 `.local/assistant/instances/<编号>`，独立保存设置、run、控制命令和预览。关闭后再次打开会复用空闲编号，保留原进度，不因多开清空记录。
 - 同一游戏窗口 / ADB 实例只允许一个 worker 控制；同一份进度仍禁止多个写入者。发现已关联的同一客户端原记录时引用原记录，不另建空历史；同一进程寿命以外不推断账号身份，换账号 / 客户端重启后仍须关联对应原进度，不用新编号绕过旧失败记录。多开会增加 OCR 和 CPU 开销，0.25 秒是每份任务的目标周期，不保证多份同时达到该频率。
 - 可用 `Assistant.cmd --instance 2` 指定已有编号。维护控制用 `assistant_control.py --instance 2 status`（也支持 pause / stop / resume）；存在其他活动实例时不允许省略编号误控。`--resume-run` 只定位原编号，不把旧任务改成新开始。
-- 新界面能避开仍运行的旧版 #1；不会终止或迁移旧任务。**旧界面 / worker 不会热加载**，所有实例要使用新逻辑，需各自停止退出后再打开。本轮已收录 v1.4.14 预览分享包；旧解压包不会自动更新。
+- 新界面能避开仍运行的旧版 #1；不会终止或迁移旧任务。**旧界面 / worker 不会热加载**，所有实例要使用新逻辑，需各自停止退出后再打开。本轮已收录 v1.4.15 预览分享包；旧解压包不会自动更新。
 - 多窗口启动、控制隔离和模拟客户端离线验证，不等于多客户端实战验收；PC 后台仍实验性，MuMu 多开实战未验收。原窗口 / 进程 / 几何 / 最小化 / 帧新鲜度、资源、防重和关键落盘保护全部保留。
 
 
@@ -20,7 +20,7 @@
 
 **误触聊天恢复（当前源码）**：完整识别当前聊天侧栏、空输入区/已知连接提示并通过即时局部像素核对后，助手自行用原生返回关闭，不要求使用者为脚本误触手动收尾；不会输入/发送聊天或点击底层。每次出现、发送和独立消失分别留证，不借关闭侧栏重新入场或写通关。剧情跳过及确认在发送前仅复核易变控件像素，不重复整屏 OCR；按钮消失/换成聊天即丢弃旧计划。短暂黑帧/旧计划过期零输入重取图，窗口/几何变化和未知/资源/容量/战败仍优先保护。PC 原生关闭与其他聊天布局尚未实机验收。
 
-这不是放开未知弹窗、付费、战败重试或重复关卡。改动已接入本机 MuMu 单实例场景；不等于完整分支章节/所有任务/PC 实战已验收，旧界面和 worker 不会热加载，本轮收录 v1.4.14 预览包。设计和回归契约见 `docs/PROGRESSION_DESIGN.md`。
+这不是放开未知弹窗、付费、战败重试或重复关卡。改动已接入本机 MuMu 单实例场景；不等于完整分支章节/所有任务/PC 实战已验收，旧界面和 worker 不会热加载，本轮收录 v1.4.15 预览包。设计和回归契约见 `docs/PROGRESSION_DESIGN.md`。
 
 ## NPC 竞技场：指定次数（实验性）
 
@@ -120,12 +120,12 @@ v1.4.9预览包包含此开发中模式，但不是“全关卡通关”分享�
 
 ## 当前预览发布
 
-**v1.4.14-preview** · Windows x64 离线预览版，PC剧场与次元探查仍为实验性。
+**v1.4.15-preview** · Windows x64 离线预览版，PC剧场与次元探查仍为实验性。
 
-- [Release说明](https://github.com/MengXingTong/epic7-mainline-bot/releases/tag/v1.4.14-preview)
-- [完整离线包](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.14-preview/Epic7-Assistant-1.4.14-preview.zip)
-- [旧版覆盖更新包](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.14-preview/Epic7-Assistant-update-1.4.14-preview.zip)
-- [SHA-256校验](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.14-preview/SHA256SUMS.txt)
+- [Release说明](https://github.com/MengXingTong/epic7-mainline-bot/releases/tag/v1.4.15-preview)
+- [完整离线包](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.15-preview/Epic7-Assistant-1.4.15-preview.zip)
+- [旧版覆盖更新包](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.15-preview/Epic7-Assistant-update-1.4.15-preview.zip)
+- [SHA-256校验](https://github.com/MengXingTong/epic7-mainline-bot/releases/download/v1.4.15-preview/SHA256SUMS.txt)
 
 已有旧版请先停止任务并正常关闭助手，再将更新包覆盖原软件目录；不要删除.local、state.json、evidence或对应原进度。补丁不含运行库，不能单独使用。完整包升级同样须关联原记录，不能以空历史重打旧关。
 
@@ -137,7 +137,7 @@ v1.4.9预览包包含此开发中模式，但不是“全关卡通关”分享�
 
 1. 打开已登录的游戏；选择客户端及具体实例。只有唯一目标时自动填入；多个目标必须手选，运行时不会擅自切换。
 2. 选择“推进剧情关卡”“普通深渊”或“圣女3-7”。MuMu 使用 ADB；PC 只用后台窗口消息（实验性），不提供前台模式。
-3. 无需设置次数，直接点击“开始推进”。不读取账号或服务器，不进入账号页，没有“仅观察”开关或额外勾选。请自行在游戏中准备好队伍和原生自动战斗；默认持续推进，不设关数或层数上限；首次使用后台模式建议在旁观察，用暂停/停止控制。
+3. 无需设置次数，直接点击“开始推进”。不读取账号或服务器，不进入账号页，没有“仅观察”开关或额外勾选。请自行在游戏中准备好队伍；统一主线普通战斗会核实 AUTO 开启与 2×，其他任务的设置适配范围见验证说明；默认持续推进，不设关数或层数上限；首次使用后台模式建议在旁观察，用暂停/停止控制。
 4. 暂停保留当前会话，点击“继续运行”重新截图；停止不会关闭游戏或清空历史；进程退出后再次点“开始推进”即可从当前画面继续。
 
 窗口按 Windows 可用工作区限制大小，内容可滚动，开始/暂停/停止固定在底部；不缩小字体硬塞内容。

@@ -39,10 +39,13 @@ def step(r):
 
 class TeamPreparationTests(unittest.TestCase):
     def episode_party(self):
-        return frame([('准备战斗',148,42),('Episode1队',87,121),('Episode2队',87,197),('Episode3队',87,271),
+        f=frame([('准备战斗',148,42),('Episode1队',87,121),('Episode2队',87,197),('Episode3队',87,271),
                       ('闯关成功',1262,233),('完成故事',1261,268),('1名以上英雄存活',1305,303),
                       ('登场的敌人',1267,361),('辅助英雄无法参与',1000,605),('·队伍战斗力',399,797),
                       ('管理队伍',92,851),('进行任务',1434,821),('新关卡',1220,168),('8/542',1267,831)])
+        for y in (229,264,299):
+            runner.cv2.fillConvexPoly(f.image,runner.np.array([(1188,y-16),(1199,y),(1188,y+16),(1177,y)],runner.np.int32),(50,180,230))
+        return f
 
     def test_native_episode_party_without_eligible_support_is_single_entry_only(self):
         f=self.episode_party();control=team_entry_control(f);self.assertEqual(control['kind'],'single_task')
@@ -57,7 +60,7 @@ class TeamPreparationTests(unittest.TestCase):
             for mode in ('missing','weak','duplicate','shifted'):
                 f=self.episode_party()
                 if mode=='missing':f.words.pop(i)
-                elif mode=='weak':f.words[i]['score']=.899 if i==9 else .979
+                elif mode=='weak':f.words[i]['score']=.899 if i==9 else (.949 if i in (5,6) else .979)
                 elif mode=='duplicate':f.words.append(copy.deepcopy(f.words[i]))
                 else:f.words[i]['x']=1600
                 self.assertEqual(team_entry_control(f)['kind'],'unknown',(i,mode))

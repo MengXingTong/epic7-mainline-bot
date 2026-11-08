@@ -322,8 +322,9 @@ class Runner:
         strengthen_owned_card_level(f,self.ocr)
         strengthen_preparation_entry_label(f,self.ocr)
         strengthen_preparation_cost(f,self.ocr)
-        from tutorial_ocr import strengthen_preparation_power_label
+        from tutorial_ocr import strengthen_preparation_power_label,strengthen_preparation_party_labels
         strengthen_preparation_power_label(f,self.ocr)
+        strengthen_preparation_party_labels(f,self.ocr)
         strengthen_free_single_summon_label(f,self.ocr)
         strengthen_wishlist_close(f,self.ocr)
         strengthen_wishlist_count(f,self.ocr)
@@ -470,6 +471,12 @@ class Runner:
         if chapter_proof and (not 0<=time.time()-self.frame.at<=5 or not 0<=time.time()-chapter_proof['captured_at']<=.75):
             from pc_backend import FrameExpired
             raise FrameExpired('章节控件复核已过期；未发送输入。')
+        setting_proof=getattr(self,'_battle_setting_proof',None)
+        if setting_proof and (setting_proof.get('source_at')!=self.frame.at
+                or not 0<=time.time()-self.frame.at<=5
+                or not 0<=time.time()-setting_proof['captured_at']<=.75):
+            from pc_backend import FrameExpired
+            raise FrameExpired('战斗设置发送前即时状态复核已过期；未发送，重新观察。')
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
         if guarded:self.save()  # Free skip intent/evidence was saved before input.
@@ -823,7 +830,7 @@ class Runner:
             if available<required: return self.attention('resource','体力不足',f'当前体力 {available} 小于消耗 {required}；手动处理后继续，没有打开兑换框。')
             self.s['stamina']=available
             control=team_entry_control(f)
-            if control['kind']!='single_task':return self.stop('安全暂停待修复','未核实当前队伍准备页的完整布局与唯一普通单次任务入口；尚未入场，不以AUTO或辅助英雄占位作为条件')
+            if control['kind']!='single_task':return self.observe_progress_evidence('team_layout',dict(code='team_layout',reason='当前队伍准备布局或控件证据暂未读全，零输入继续取新帧核实；未发送入场，不以AUTO、辅助英雄占位或固定成就文案作为条件。'))
             key=self.ticket['key']
             from entry_journal import can_enter,reserve_entry,finish_dispatch
             from pc_backend import TapNotSent

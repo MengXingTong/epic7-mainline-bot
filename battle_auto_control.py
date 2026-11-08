@@ -1,13 +1,8 @@
-"""Free native battle AUTO; UI operation never grants entry/result ownership."""
-import copy
+"""Native battle context and legacy glyph reader; glyph presence is not OFF."""
 import re
-import time
 import cv2
 import numpy as np
 from entry_journal import attempt_digest
-from ui_control_guard import verify_live_controls
-
-MAX_MESSAGES=2
 
 
 def source(state):
@@ -47,7 +42,7 @@ def hud(frame):
     wave=[w for w in frame.words if re.fullmatch(r'[xX×※]?\s*[1-5]\s*/\s*[1-5]',w['text'])
           and w['score']>=.85 and 155<=w['x']<=310 and 0<=w['y']<=70]
     hp=[w for w in frame.words if re.fullmatch(r'\d{1,6}/\d{1,6}',w['text'])
-        and w['score']>=.98 and 300<=w['x']<=580 and 835<=w['y']<=890]
+        and w['score']>=.98 and 300<=w['x']<=580 and 835<=w['y']<=865]
     if len(wave)!=1 or len(hp)!=1:return False
     current,total=map(int,re.search(r'(\d+)\s*/\s*(\d+)',wave[0]['text']).groups())
     health,maximum=map(int,hp[0]['text'].split('/'))
@@ -59,7 +54,7 @@ def hud(frame):
 
 
 def off_target(frame,ocr):
-    """One current-field read only if full OCR missed A; no old-frame cache."""
+    """Legacy canonical glyph candidate only; NEVER proves an OFF state by itself."""
     if hasattr(frame,'battle_auto_target'):return frame.battle_auto_target
     frame.battle_auto_target=None
     tile=frame.image[5:85,1360:1440];mask=np.uint8(tile.min(axis=2)>210)*255
@@ -91,46 +86,6 @@ def off_target(frame,ocr):
 
 
 def step(r,frame,mode):
-    """A free UI operation: positive battle HUD, exact A + two OFF arrows."""
-    from entry_preflight import active_context
-    context=active_context(r) or control_context(r.s,r.run_id)
-    if not context or not hud(frame):return None
-    if not 0<=time.time()-frame.at<=3:return True,.25
-    records=r.s.setdefault('battle_auto_controls',{});record=records.get(context['key'])
-    if record and record.get('run_id')!=r.run_id:
-        return r.observe_progress_evidence('battle_auto',dict(code='foreign_auto_record',reason='自动控件原记录不属于当前run；不切换。'))
-    target=off_target(frame,r.ocr)
-    messages=(record or {}).get('messages',[])
-    if target is None:
-        if messages and mode=='new_player_tutorial':
-            r.s['reason']='自动按钮已发送，继续观察真实战斗；不追加基础技能手操、不重复开战。'
-            return True,.25
-        return None
-    if messages:
-        last=messages[-1]
-        if (last['status'] not in ('sent','not_sent') or len(messages)>=MAX_MESSAGES
-            or frame.at<=last['captured_at'] or time.time()-last['finished_at']<4):
-            r.s['reason']='等待游戏接受已发送的自动按钮；不重复切换或发送入场。'
-            return True,.25
-    proof=verify_live_controls(r,[target],'battle-auto')
-    if proof is None:return True,.25
-    if time.time()-frame.at>3 or time.time()-proof['captured_at']>.75:return True,.25
-    if record is None:
-        record=dict(run_id=r.run_id,**context,messages=[])
-        records[context['key']]=record
-    message=dict(status='reserved',at=time.time(),captured_at=frame.at,target=copy.deepcopy(target),proof=proof,
-                 evidence=r.evidence('battle-auto-off-'+str(len(record['messages'])+1)))
-    record['messages'].append(message);r.save()
-    from pc_backend import TapNotSent,FrameExpired
-    try:
-        if time.time()-proof['captured_at']>.75 or time.time()-frame.at>5:
-            message.update(status='not_sent',reason='fresh verification expired before invocation')
-        else:
-            result=r.action('开启已核实的战斗内自动（不入场、不托管）',target)
-            message['status']='not_sent' if result is False else 'sent'
-    except (TapNotSent,FrameExpired) as exc:
-        message.update(status='not_sent',reason=str(exc))
-    except BaseException:
-        message.update(status='unknown',finished_at=time.time());r.save();raise
-    message['finished_at']=time.time();r.save()
-    return True,.25
+    """Compatibility entry: reconcile positive AUTO-on and battle-speed-2x state."""
+    from battle_settings import step as reconcile
+    return reconcile(r,frame,mode)
