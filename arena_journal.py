@@ -3,7 +3,7 @@ from pathlib import Path
 from dataclasses import asdict,is_dataclass
 import hashlib,time,uuid
 from assistant_config import atomic_json,read_json
-from arena_core import count
+from arena_core import count,norm
 from entry_journal import reserve_entry,finish_dispatch,attempt_digest
 
 
@@ -72,9 +72,56 @@ class ArenaJournal:
         challenges=[a for a in tail if a['kind']=='challenge']
         return selected,challenges[-1] if challenges else None
 
+    def normal_mode_switch(self):
+        rows=[a for a in self.state['actions'] if a['run_id']==self.run_id]
+        boundary=max((i for i,a in enumerate(rows) if a['kind'] in
+                      ('entry','result_close','return_to_npc','navigate')),default=-1)
+        switches=[a for a in rows[boundary+1:] if a['kind']=='normal_mode']
+        return switches[-1] if switches else None
+
+    def normal_mode_pending(self):
+        switch=self.normal_mode_switch()
+        return bool(switch and not any(v['switch_id']==switch['id']
+                    for v in self.state.get('normal_mode_observations',[])))
+
+    def normal_mode_context(self,reading,target_binding):
+        """One free setting per current team chain; never a quick-entry retry."""
+        if (self.active or any(r.get('pending_result') for r in self.state['runs'].values())
+            or self.remaining<=0 or reading.scene!='arena_quick_team' or reading.cost!=1
+            or reading.stock is None or reading.stock<1 or not reading.target
+            or reading.target.source!='arena_normal_mode_toggle'
+            or self.normal_mode_switch()
+            or any(k not in self.state['completed'] for k in self.state['attempted'])):return None
+        own=[a for a in self.state['actions'] if a['run_id']==self.run_id]
+        if not own and self.run['wins']==0:return dict(reason='current_screen_start')
+        if self.entry_chain_matches(reading,target_binding):
+            selected,challenged=self.navigation()
+            return dict(reason='selected_npc_team',selection_id=selected['id'],challenge_id=challenged['id'])
+        return None
+
+    def normal_mode_observation_ready(self,reading,target_binding,captured_at):
+        switch=self.normal_mode_switch()
+        if (not switch or not self.normal_mode_pending() or switch['status']!='sent'
+            or reading.scene!='arena_team' or not reading.target
+            or norm(reading.target.text)!='战斗开始' or reading.cost!=1
+            or reading.stock is None or reading.stock<switch['reading']['stock']
+            or reading.opponent!=switch['reading']['opponent']
+            or binding(target_binding)!=switch['binding']
+            or captured_at<=switch['evidence']['captured_at']):return False
+        return True
+
+    def observe_normal_mode(self,reading,evidence,target_binding):
+        """Only a later ordinary start button proves the free switch took effect."""
+        if not self.normal_mode_observation_ready(reading,target_binding,evidence['captured_at']):return False
+        switch=self.normal_mode_switch()
+        self.state.setdefault('normal_mode_observations',[]).append(dict(
+            switch_id=switch['id'],run_id=self.run_id,reading=asdict(reading),
+            binding=binding(target_binding),evidence=evidence,at=time.time()))
+        self.save();return True
+
     def entry_chain_matches(self,reading,target_binding):
         selected,challenged=self.navigation();bound=binding(target_binding)
-        if not selected or not challenged:return False
+        if self.normal_mode_pending() or not selected or not challenged:return False
         rows=self.state['actions']
         return bool(rows.index(selected)<rows.index(challenged)
             and all(a['status']=='sent' and a['binding']==bound
@@ -121,8 +168,8 @@ class ArenaJournal:
             or reading.stock is None or reading.stock<1 or self.entry_chain_matches(reading,target_binding)
             or any(k not in self.state['completed'] for k in self.state['attempted'])):
             return None
-        own=[a for a in self.state['actions'] if a['run_id']==self.run_id]
-        if not own and self.run['wins']==0:
+        own=[a for a in self.state['actions'] if a['run_id']==self.run_id and a['kind']!='normal_mode']
+        if not own and self.run['wins']==0 and not self.normal_mode_pending():
             return dict(reason='current_screen_start',send_index=1)
         last=own[-1] if own else None
         if last and last['kind']=='return_to_npc':
@@ -171,6 +218,10 @@ class ArenaJournal:
                 or (previous and self.state['actions'].index(previous)>self.state['actions'].index(selected))):
                 raise ValueError('挑战必须属于当前同名选人；原挑战已发送时只观察接受，不按OCR变化重发。')
             record['selection_id']=selected['id']
+        if kind=='normal_mode':
+            context=self.normal_mode_context(reading,target_binding)
+            if not context:raise ValueError('当前不是允许单次免费切换的NPC快速准备页；不点快速对战或重复切换。')
+            record.update(free_ui_only=True,requested_mode='normal',**context)
         if kind=='return_to_npc':
             context=self.return_to_npc_context(reading,target_binding,evidence['captured_at'])
             if not context:

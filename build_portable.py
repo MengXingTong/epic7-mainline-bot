@@ -8,7 +8,7 @@ sys.path.insert(0,str(ROOT))
 from ui_text import ChineseArgumentParser
 SOURCES=('dimension_vision.py','dimension_ocr.py','dimension_routes.py','dimension_route_vision.py','dimension_core.py','dimension_journal.py','dimension_worker.py','ui_text.py','assistant_app.py','assistant_config.py','assistant_status.py','assistant_portable.py','assistant_control.py','assistant_worker.py','assistant_transport.py','task_blockers.py','task_overlays.py','task_timing.py','mainline_map.py','story_core.py','windows_elevation.py','abyss_core.py','abyss_templates.py','pc_backend.py','pc_message_backend.py','pc_message_probe.py','pc_quickstart.py','pc_startup.py','pc_profile.py','mainline_reconcile.py','runner.py','runtime_paths.py','state_tools.py','launcher.py','supervisor.py','portable_entry.py','portable_selfcheck.py','Assistant.cmd','requirements.txt','CHANGELOG.md')
 SOURCES+=('client_viewport.py','entry_journal.py','story_open_ack.py','free_notices.py','Start.cmd','PCStart.cmd')
-SOURCES+=('mumu_discovery.py','assistant_instances.py')
+SOURCES+=('mumu_discovery.py','assistant_instances.py','assistant_selection.py','pc_clients.py')
 SOURCES+=('progression_evidence.py','progression_facts.py','map_identity.py','entry_preparation.py','entry_preflight.py')
 SOURCES+=('ui_control_guard.py','chat_recovery.py','battle_auto_control.py','battle_settings.py')
 SOURCES+=('arena_core.py','arena_worker.py','arena_journal.py','arena_recovery.py','arena_vision.py')
@@ -17,8 +17,8 @@ SOURCES+=('theater_core.py','theater_vision.py','theater_journal.py','theater_wo
 SOURCES+=('tutorial_core.py','tutorial_ocr.py','mainline_maintenance.py','story_reopen.py','free_story_handoff.py','mainline_story_results.py')
 SOURCES+=('tutorial_entry_handoff.py','tutorial_control_templates.py','tutorial_navigation.py','tutorial_team_dialog.py','tutorial_battle_confirmation.py')
 SOURCES+=('theater_directory.py','theater_ticket_ocr.py','theater_pending_confirmation.py')
-VERSION='1.4.15-preview'
-RELEASE_DATE='2026-11-08'
+VERSION='1.4.16-preview'
+RELEASE_DATE='2026-11-09'
 
 
 def copy_tree(source,target):
@@ -84,7 +84,8 @@ def build(args):
     shutil.copy2(ROOT/'docs'/'STALL_VALIDATION_2026-11-04.md',out/'STALL_VALIDATION.md')
     shutil.copy2(ROOT/'docs'/'DIMENSION_VALIDATION_2026-11-03.md',out/'DIMENSION_VALIDATION.md')
     shutil.copy2(ROOT/'docs'/'THEATER_VALIDATION_2026-11-05.md',out/'THEATER_VALIDATION.md')
-    shutil.copy2(ROOT/'docs'/'MAINLINE_VALIDATION_2026-11-08.md',out/'MAINLINE_VALIDATION.md')
+    shutil.copy2(ROOT/'docs'/'RELEASE_VALIDATION_2026-11-09.md',out/'MAINLINE_VALIDATION.md')
+    shutil.copy2(ROOT/'docs'/'STEAM_VALIDATION_2026-11-09.md',out/'STEAM_VALIDATION.md')
     shutil.copy2(out/'Assistant.cmd',out/'启动助手.cmd')
     (out/'SelfCheck.cmd').write_text('@echo off\r\nsetlocal\r\nchcp 65001 >nul\r\n"%~dp0gui\\python.exe" -B -X utf8 "%~dp0portable_selfcheck.py"\r\necho.\r\npause\r\n',encoding='ascii',newline='')
     notices='离线预览版 '+VERSION+'\n\n'+'第三方软件与发布说明\n\n本包为 Windows 64 位离线预览版。\n界面运行库 CPython 3.11 许可：gui/LICENSE.txt。\n工作运行库 CPython 3.12 许可：runtime/LICENSE.txt。\nTcl/Tk 许可：gui/tcl/tcl8.6/license.terms 与 gui/tcl/tk8.6/license.terms。\n界面图像库 Pillow 许可与元数据：gui/site-packages/pillow-*.dist-info。\n工作依赖的许可与元数据：vendor/*.dist-info 和各依赖目录。\n工作依赖版本见 requirements.txt；界面运行库版本见 BUILD_INFO.json。\n\n不分发游戏、MuMu 模拟器、ADB 程序、账号、凭据、私有进度、完整游戏截图或日志。\n识别素材仅含通用锁图标裁片及 19 个限定位置的二值战斗界面字形掩码；\n这些是游戏界面参考素材，不是本项目宣称原创的游戏美术。\n不承诺兼容性或账号安全；不注入、不修改内存，也不绕过安全机制。\n'
@@ -119,15 +120,22 @@ def build_update(package):
     archive=package.with_name('Epic7-Assistant-update-'+VERSION+'.zip')
     if archive.exists():raise ValueError('更新压缩包已存在，禁止覆盖。')
     names=set(SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md','STALL_VALIDATION.md','DIMENSION_VALIDATION.md','THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
-    names.update(('THEATER_VALIDATION.md','MAINLINE_VALIDATION.md'))
+    names.update(('THEATER_VALIDATION.md','MAINLINE_VALIDATION.md','STEAM_VALIDATION.md'))
     names|={p.relative_to(package).as_posix() for p in (package/'assets').rglob('*') if p.is_file()}
-    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 / v1.4.7 / v1.4.8 / v1.4.9 / v1.4.10 / v1.4.11 / v1.4.13 / v1.4.14 完整离线包）
+    instructions=f"""第七史诗统一助手 {VERSION} 覆盖更新补丁（需要 v1.1 / v1.2 / v1.3 / v1.4 / v1.4.1 / v1.4.2 / v1.4.3 / v1.4.4 / v1.4.5 / v1.4.6 / v1.4.7 / v1.4.8 / v1.4.9 / v1.4.10 / v1.4.11 / v1.4.13 / v1.4.14 / v1.4.15 完整离线包）
 
 1. 先停止任务并关闭助手；不用关闭游戏。
 2. 将本 ZIP 内全部文件解压/复制到原软件目录，确认覆盖同名程序文件。
    是覆盖旧目录，不是只在新的补丁目录运行；补丁不含运行库。
 3. 不删除 .local、state.json、evidence 或原进度目录！本补丁没有这些文件，不会清空进度。
 4. 再双击旧目录中的 启动助手.cmd。
+
+v1.4.16 加入Steam客户端实验性发现和后台截图适配，实例列表区分Steam/STOVE。
+Steam仅完成本机失焦1280×720截图/OCR，游戏内消息接受/完整任务未验收，不自动登录或选服。
+容量处理后可用当前任务“处理后继续”，不再强迫新开始；明确容量拒绝的原链需保存本次继续命令，
+已知队伍/辅助页缺地图链时先免费返回地图重验，不直接放开无地图链入场，不重发已接受/战败/不明入场。
+另收录实例刷新保留与检测错误恢复、准备页关名暂缺观察、竞技场快速模式免费切回普通战斗。
+本版新增流程以离线/模拟回归为主，未取得对应原图的根源之树解锁界面未新增适配。见MAINLINE_VALIDATION.md。
 
 v1.4.15 在统一主线普通战斗中维持AUTO开启、速度2×；只在明确关闭/1×时切换，已正确则不点。
 修正把白色A/箭头当作关闭而反向误切的问题；发送与后续独立状态确认分开留证，未知状态不盲点。

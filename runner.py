@@ -780,7 +780,9 @@ class Runner:
         if mode=='support':
             if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('辅助界面没有本轮新关验证凭据'); return True,3
-            if not self.title_matches(f): return self.stop('安全暂停待修复','辅助选择界面的关卡名称与已验证地图节点不一致')
+            if not self.title_matches(f):
+                return self.observe_progress_evidence('preparation_title',dict(code='support_title',
+                    reason='辅助选择页的当前关名尚未匹配原地图节点；零输入读取新帧，不把加载缺字或不匹配判为战败，不刷新地图凭据。'))
             self.ticket['phase']='support'
             self.action('选择当前队伍',f.find('选择队伍',(1130,750,1599,899))); return True,3
         if mode=='team_hero_selection':
@@ -818,7 +820,9 @@ class Runner:
                 return self.observe_progress_evidence('entry_response',dict(code='entry_response',reason='当前仍在队伍页，入口发送不代表游戏接受或失败；继续观察，不重复消耗入场。'),self.s['active'])
             if not self.ticket or self.ticket.get('phase') not in ('map','support') or time.time()-self.ticket['verified_epoch']>120:
                 self.ticket=None; self.back('队伍界面没有完整地图验证链'); return True,3
-            if not self.title_matches(f): return self.stop('安全暂停待修复','开战前关卡名称不一致，拒绝入场')
+            if not self.title_matches(f):
+                return self.observe_progress_evidence('preparation_title',dict(code='team_title',
+                    reason='队伍页的当前关名尚未匹配原地图节点；零输入读取新帧，尚未入场，不刷新地图凭据或重发开战。'))
             cost=f.find(r'\d+\s*/\s*\d+',(1180,775,1340,880))
             if not cost or cost['score']<.90:
                 if age<20:

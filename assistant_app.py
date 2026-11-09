@@ -8,6 +8,7 @@ from tkinter import ttk, filedialog
 from PIL import Image,ImageTk
 from assistant_config import CODE_ROOT,HOME,load_settings,atomic_json,read_json,validate_run,window_layout
 from assistant_status import activity,scene_caption
+from assistant_selection import TargetSelection
 BG,CARD,INK,MUTED,GREEN,LINE='#f3f6f4','#ffffff','#203c35','#6b8078','#087b65','#dce6e0'
 CLIENTS={'自动识别':'auto','MuMu 模拟器':'mumu','电脑客户端':'pc'}
 TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint_3_7','次元探查（实验性）':'dimension','月光剧场（实验性）':'theater','买企鹅（实验性）':'penguin','竞技场 NPC（实验性）':'arena'}
@@ -15,7 +16,7 @@ TASKS={'推进剧情关卡':'mainline','普通深渊':'abyss','圣女3-7':'saint
 class Assistant:
     def __init__(self,root,ui_check=False,read_only=False,*,home=HOME,slot_number=1,base_home=HOME):
         self.home=Path(home).resolve();self.base_home=Path(base_home).resolve();self.slot_number=slot_number
-        self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings(self.home,inherit_legacy=slot_number==1);self.targets=[];self.filtered=[]
+        self.root=root;self.ui_check=ui_check;self.read_only=bool(read_only);self.settings=load_settings(self.home,inherit_legacy=slot_number==1);self.targets=[];self.filtered=[];self.selection=TargetSelection()
         if slot_number!=1 and not self.settings.get('worker_python'):
             primary=read_json(self.base_home/'settings.json',{})
             self.settings['worker_python']=primary.get('worker_python','')
@@ -89,7 +90,7 @@ class Assistant:
         self.arena_box=ttk.Spinbox(connection,from_=1,to=9999,textvariable=self.arena_count,width=12)
         self.arena_box.grid(row=3,column=1,columnspan=2,sticky='ew',pady=4)
         self.client_box.bind('<<ComboboxSelected>>',lambda e:self.filter_targets())
-        self.target_box.bind('<<ComboboxSelected>>',lambda e:self.update_note())
+        self.target_box.bind('<<ComboboxSelected>>',lambda e:self.choose_target())
         self.task_box.bind('<<ComboboxSelected>>',lambda e:(self.update_note(),self.update_buttons()))
         status_card=self.card(outer)
         tk.Label(status_card,text='当前步骤 / 需要处理的原因',bg=CARD,fg=MUTED,font=('Microsoft YaHei UI',9)).pack(anchor='w',pady=(0,4))
@@ -136,9 +137,20 @@ class Assistant:
         if int(self.logs.index('end-1c').split('.')[0])>160:self.logs.delete('1.0','30.0')
         self.logs.configure(state='disabled')
     def selected_target(self):
-        rows=[t for t in self.filtered if t['label']==self.instance.get()]
-        if len(rows)!=1:raise ValueError('请选择具体客户端/实例；多个目标不会自动切换。')
-        return rows[0]
+        if self.scanning:raise ValueError('正在检测客户端；请等待检测完成后再开始。')
+        target=self.selection.target()
+        if self.instance.get()!=self.selection.display:
+            raise ValueError('绑定实例选择尚未核实；请在“绑定实例”下拉框中重新选择。')
+        return target
+    def choose_target(self):
+        try:
+            if self.scanning:raise ValueError('正在检测客户端；请等待检测完成后再选择实例。')
+            self.selection.choose(self.instance.get())
+            if not (self.process and self.process.poll() is None):
+                self.mode='idle';self.status.set(self.selection.message)
+        except ValueError as exc:
+            self.instance.set(self.selection.display);self.status.set(error_text(exc))
+        self.update_note();self.update_buttons()
     def import_profile(self):
         if self.process and self.process.poll() is None:return
         folder=filedialog.askdirectory(parent=self.root,title='选择自己的原进度目录（含 state.json）；不会清空或复制')
@@ -167,13 +179,12 @@ class Assistant:
             value['arena_count']=count(self.arena_count.get())
         return value
     def filter_targets(self):
-        client=CLIENTS[self.client.get()]
-        self.filtered=[t for t in self.targets if client=='auto' or t['client']==client]
-        self.target_box.configure(values=[t['label'] for t in self.filtered])
-        if len(self.filtered)==1:self.instance.set(self.filtered[0]['label'])
-        elif not self.filtered:self.instance.set('未检测到所选客户端')
-        else:self.instance.set('检测到多个目标，请手动选择')
-        self.update_note()
+        self.selection.refresh(self.targets,CLIENTS[self.client.get()])
+        self.filtered=self.selection.rows
+        self.target_box.configure(values=self.selection.labels)
+        self.instance.set(self.selection.display)
+        if not (self.process and self.process.poll() is None):self.status.set(self.selection.message)
+        self.update_note();self.update_buttons()
     def update_note(self):
         arena=TASKS[self.task.get()]=='arena'
         if arena:self.arena_label.grid();self.arena_box.grid()
@@ -216,7 +227,8 @@ class Assistant:
         if alive and self.mode not in ('paused','attention'):label={'starting':'检查中…','checking':'检查中…','recovering':'恢复画面中…','waiting_input':'等待输入空闲…','waiting_scene':'核对画面中…','waiting_evidence':'核实结果中…','pausing':'暂停中…','stopping':'停止中…','observe':'观察中…','run':'观察中…' if self.read_only else '推进中…'}.get(self.mode,'等待进程退出…')
         if self.mode=='attention' and alive:label='处理后继续'
         if self.scanning:label='检测客户端中…'
-        self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) else 'normal')
+        selected=self.selection.ready and self.instance.get()==self.selection.display
+        self.start_button.configure(text=label,state='disabled' if self.scanning or (alive and self.mode not in ('paused','attention')) or (not alive and not selected) else 'normal')
         self.pause_button.configure(state='normal' if alive and self.mode in ('run','observe','starting','checking','recovering','waiting_input','waiting_scene','waiting_evidence') else 'disabled')
         self.stop_button.configure(state='normal' if alive and self.mode not in ('stopping','stopped','done','blocked') else 'disabled')
         self.update_activity()
@@ -258,18 +270,31 @@ class Assistant:
     def scan(self):
         if self.scanning or (self.process and self.process.poll() is None):return
         self.scanning=True;self.update_buttons();self.refresh_button.configure(state='disabled')
-        self.status.set('正在检测本机客户端，任务尚未启动…');self.home.mkdir(parents=True,exist_ok=True)
-        settings_path=self.home/'discovery-settings.json';atomic_json(settings_path,self.settings)
+        self.status.set('正在检测本机客户端，任务尚未启动…')
+        try:
+            self.home.mkdir(parents=True,exist_ok=True)
+            settings_path=self.home/'discovery-settings.json';atomic_json(settings_path,self.settings)
+        except Exception as exc:
+            self.events.put(('scan_error',error_text(exc)));return
         def work():
             try:
                 py=self.settings.get('worker_python','')
                 if not Path(py).is_file():raise ValueError('未找到已有工作运行库；没有自动下载或新建进度。')
                 r=subprocess.run([py,'-B','-X','utf8',str(CODE_ROOT/'assistant_worker.py'),'--discover',str(settings_path)],capture_output=True,text=True,encoding='utf-8',timeout=25,creationflags=subprocess.CREATE_NO_WINDOW)
                 if r.returncode:raise ValueError(r.stderr.strip()[-500:])
-                self.events.put(('targets',json.loads(r.stdout)))
+                result=json.loads(r.stdout)
+                if (not isinstance(result,dict) or not isinstance(result.get('targets'),list)
+                        or not isinstance(result.get('mumu',{}),dict)
+                        or not isinstance(result.get('warnings',[]),list)
+                        or any(not isinstance(w,str) for w in result.get('warnings',[]))):
+                    raise ValueError('检测程序返回的客户端列表无效；请刷新重新核实。')
+                self.events.put(('targets',result))
             except Exception as exc:self.events.put(('scan_error',error_text(exc)))
-        threading.Thread(target=work,daemon=True).start()
+        try:threading.Thread(target=work,daemon=True).start()
+        except Exception as exc:self.events.put(('scan_error',error_text(exc)))
     def start(self):
+        if self.scanning:
+            self.status.set('正在检测客户端；请等待检测完成后再开始。');return
         if self.process and self.process.poll() is None:
             if self.mode in ('paused','attention'):self.command('run');self.mode='starting';self.last_heartbeat=time.monotonic();self.update_buttons()
             else:self.status.set('当前任务仍在运行；先暂停或停止后再切换。')
@@ -351,9 +376,10 @@ class Assistant:
                 kind,data=self.events.get_nowait()
                 if kind=='targets':
                     self.scanning=False;self.refresh_button.configure(state='normal');self.targets=data['targets'];self.settings['mumu']=data.get('mumu',self.settings.get('mumu',{}));self.filter_targets()
-                    self.mode='idle';self.status.set('已发现 '+str(len(self.targets))+' 个客户端。任务尚未启动。'+('\n'+'；'.join(data['warnings']) if data.get('warnings') else ''));self.update_buttons()
+                    self.mode='idle';self.status.set(self.selection.message+('\n'+'；'.join(data['warnings']) if data.get('warnings') else ''));self.update_buttons()
                 elif kind=='scan_error':
-                    self.scanning=False;self.refresh_button.configure(state='normal');self.mode='blocked';self.status.set(data);self.log(data);self.update_buttons()
+                    self.scanning=False;self.refresh_button.configure(state='normal');self.targets=[];self.selection.fail(data);self.filtered=[];self.target_box.configure(values=[]);self.instance.set(self.selection.display)
+                    self.mode='blocked';self.status.set(self.selection.message);self.log(data);self.update_note();self.update_buttons()
                 elif kind in ('error','log'):self.log(data);self.status.set(data) if kind=='error' else None
                 elif kind=='worker':
                     if data.get('kind')=='profile':

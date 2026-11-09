@@ -72,7 +72,7 @@ class ReleasePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='epic7-clean-update-') as folder:
             root=Path(folder)/'package';root.mkdir()
             names=set(build.SOURCES)|{'portable.json','BUILD_INFO.json','README_zh-CN.md','VALIDATION.md',
-                'STALL_VALIDATION.md','DIMENSION_VALIDATION.md','THEATER_VALIDATION.md','MAINLINE_VALIDATION.md',
+                'STALL_VALIDATION.md','DIMENSION_VALIDATION.md','THEATER_VALIDATION.md','MAINLINE_VALIDATION.md','STEAM_VALIDATION.md',
                 'THIRD_PARTY_NOTICES.txt','SHA256SUMS.json','SelfCheck.cmd','启动助手.cmd'}
             for name in names:(root/name).write_text('synthetic package source',encoding='utf-8')
             (root/'portable.json').write_text(json.dumps({'version':build.VERSION}),encoding='utf-8')
@@ -82,6 +82,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
             with zipfile.ZipFile(build.build_update(root)) as archive:
                 self.assertIn('MAINLINE_VALIDATION.md',archive.namelist())
+                self.assertIn('STEAM_VALIDATION.md',archive.namelist())
+                self.assertIn('pc_clients.py',archive.namelist())
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(set(archive.namelist()),names|{'UPDATE_README.txt'})
                 self.assertFalse(any(name.startswith(('gui/','runtime/','vendor/','.local/','history/')) for name in archive.namelist()))

@@ -17,7 +17,7 @@ def configured():
     d=reserve_entry(r.s,o['key'],o);finish_dispatch(d,'sent');r.s['active']=None
     r.s['entry_preparations']={d['id']:dict(phase='sent',run_id='old-run')}
     r.evidence=Mock(return_value='independent.png')
-    r.map_ticket=Mock(return_value=(dict(o,locked=False,clear_badge=False),[dict(stage=6,locked=True)],'未通关蓝色当前节点'))
+    r.map_ticket=Mock(return_value=(dict(o,locked=False,clear_badge=False,verified_epoch=time.time()),[dict(stage=6,locked=True)],'未通关蓝色当前节点'))
     return r,o,d
 
 
@@ -83,7 +83,7 @@ class RefusalTests(unittest.TestCase):
         with patch.object(flow,'evidence') as proof:flow.observe(r,r.frame,'capacity_stop')
         proof.assert_not_called();self.assertNotIn('entry_preflight_flows',r.s)
 
-    def test_same_run_capacity_handling_cannot_resend(self):
+    def test_same_run_capacity_handling_without_continue_cannot_resend(self):
         r,o,d=configured();rec=rejected(r,o);r.run_id='old-run'
         self.assertEqual(apply(r,'map'),(True,.25));r.action.assert_not_called();self.assertFalse(rec['sends'])
 
@@ -142,7 +142,7 @@ class RefusalTests(unittest.TestCase):
         with patch.object(flow,'evidence') as e:flow.observe(r,self.modal(),'capacity_stop')
         e.assert_not_called();self.assertEqual(len(rec['refusals']),1)
 
-    def test_refusal_of_continuation_requires_new_independent_response_and_new_run(self):
+    def test_refusal_of_continuation_requires_new_independent_response_for_legacy_new_run(self):
         r,o,d=configured();rec=ready(r,o);apply(r,'team');r.action.reset_mock();r.frame=self.modal()
         with patch.object(flow,'evidence',return_value=dict(image='new-refusal.png')):flow.observe(r,r.frame,'capacity_stop')
         self.assertEqual(len(rec['refusals']),2);self.assertEqual(rec['phase'],'rejected')

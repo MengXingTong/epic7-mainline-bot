@@ -3,6 +3,30 @@ import numpy as np
 import cv2
 
 
+def normal_mode_toggle(image):
+    """The white lightning/radial mode tile, NOT the blue quick-entry button.
+
+    Require its native light tile, tall central lightning and multiple detached
+    dark radial segments. OCR/page/resource gates remain the classifier's job.
+    No private templates and no desktop coordinates are used.
+    """
+    rgb=np.asarray(image.convert('RGB'));h,w=rgb.shape[:2]
+    tile=rgb[round(h*.878):round(h*.963),round(w*.723):round(w*.769)]
+    if min(tile.shape[:2],default=0)<15:return False
+    white=np.min(tile,axis=2)>215;dark=np.max(tile,axis=2)<85
+    if not (.65<float(white.mean())<.87 and .10<float(dark.mean())<.30):return False
+    _,_,stats,centers=cv2.connectedComponentsWithStats(dark.astype(np.uint8))
+    th,tw=tile.shape[:2];area=th*tw
+    inside=[(s,c) for s,c in zip(stats[1:],centers[1:])
+            if s[0]>0 and s[1]>0 and s[0]+s[2]<tw and s[1]+s[3]<th]
+    lightning=[s for s,c in inside if .04<=s[4]/area<=.13
+               and .50<=s[3]/th<=.80 and .20<=s[2]/tw<=.48
+               and .35<=c[0]/tw<=.68 and .30<=c[1]/th<=.68]
+    rays=[s for s,c in inside if .005<=s[4]/area<=.035
+          and .07<=s[2]/tw<=.35 and .07<=s[3]/th<=.35]
+    return len(lightning)==1 and len(rays)>=3
+
+
 def apply(image,o):
     rgb=np.asarray(image.convert('RGB'));h,w=rgb.shape[:2]
     def crop(rect):
@@ -45,6 +69,7 @@ def apply(image,o):
         if (height>arrow.shape[0]*.65 and len(ends) and len(middle)
             and ends.mean()>middle.min()+arrow.shape[1]*.35):
             o.visuals.add('arena_native_back')
+    if normal_mode_toggle(image):o.visuals.add('arena_normal_mode_toggle')
     from free_notices import notice_modal_band_visible
     sampled=cv2.resize(rgb,(1600,900))
     if notice_modal_band_visible(sampled):o.visuals.add('arena_notice_modal')

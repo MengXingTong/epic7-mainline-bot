@@ -15,6 +15,7 @@ class GuiActivityTests(unittest.TestCase):
         self.root=tk.Tk();self.app=Assistant(self.root,ui_check=True);self.app.command=Mock();self.app.run_id='test'
     def tearDown(self):self.root.destroy();self.prefs.stop()
     def worker(self,mode='observe'):
+        self.app.targets=[dict(client='pc',label='fake PC',hwnd=1,pid=2,created=3,exe='EpicSeven.exe')];self.app.filter_targets()
         child=Mock();child.pid=123;child.poll.return_value=None
         self.app.read_only=mode=='observe';self.app.process=child;self.app.mode=mode;self.app.update_buttons();return child
     def event(self,mode,detail='current step'):
@@ -34,7 +35,7 @@ class GuiActivityTests(unittest.TestCase):
                         app=Assistant(top,ui_check=True)
                     self.assertEqual(app.client.get(),'自动识别')
                     self.assertEqual(app.task.get(),'普通深渊')
-                    app.targets=[dict(client='pc',label='live-pc')];app.filter_targets()
+                    app.targets=[dict(client='pc',label='live-pc',hwnd=1,pid=2,created=3,exe='EpicSeven.exe')];app.filter_targets()
                     self.assertEqual(app.selected_target()['client'],'pc')
                 finally:top.destroy()
     def test_live_observer_clearly_labels_button(self):
@@ -109,7 +110,7 @@ class GuiActivityTests(unittest.TestCase):
         from pathlib import Path
         with tempfile.TemporaryDirectory() as d:
             home=Path(d);self.app.home=home;self.app.base_home=home;self.app.settings.update(worker_python=sys.executable,observe=True)
-            target={'client':'pc','label':'test','hwnd':1,'pid':2,'created':3.,'exe':'synthetic-game.exe','title':'synthetic'};self.app.filtered=[target];self.app.instance.set('test')
+            target={'client':'pc','label':'test','hwnd':1,'pid':2,'created':3.,'exe':'synthetic-game.exe','title':'synthetic'};self.app.targets=[target];self.app.filter_targets()
             child=Mock();child.pid=123;child.poll.return_value=None
             with patch('assistant_app.HOME',home),patch('assistant_app.validate_run',return_value=(home,{})),patch('assistant_portable.save_settings'),patch('assistant_app.subprocess.Popen',return_value=child) as launch,patch('assistant_app.threading.Thread'):
                 self.app.start()

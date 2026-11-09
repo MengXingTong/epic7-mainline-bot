@@ -1,5 +1,6 @@
 """Opt-in window-message transport; no focus theft, cursor movement or SendInput.
-Validated only on the local EpicSeven GLFW30 client in restored-window mode.
+Uses exact STOVE/Steam game executables and the GLFW30 window-class guard.
+Steam discovery/background capture are verified locally; input is experimental.
 API success is delivery, not game acceptance: planners must verify the next frame.
 """
 from __future__ import annotations

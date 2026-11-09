@@ -83,7 +83,9 @@ class Control:
             command=read_json(self.folder/'control.json',{})
             if command.get('run_id')!=self.run_id or command.get('action')=='stop':raise StopRun()
             if command.get('action')=='run' and command.get('command_id') and command['command_id']!=old:
-                self.status('已继续，正在重新读取当前画面。',mode='run',attention_code='');return
+                self.status('已继续，正在重新读取当前画面。',mode='run',attention_code='')
+                return dict(run_id=self.run_id,action='run',command_id=command['command_id'],
+                            attention_code=exc.code,resumed_at=time.time())
             time.sleep(.2)
 
 class GuardedApi:
@@ -165,10 +167,11 @@ class PlanningFrameGate:
 
 def discover(settings):
     from pc_backend import Win32Api
+    from pc_clients import pc_distribution
     api=Win32Api();targets=[]
     for title in ('第七史诗','第七史詩','Epic Seven'):
         for s in api.windows('',title):
-            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'桌面端 · 进程 {s.pid} · 窗口 {s.hwnd:X} · {s.width}×{s.height}'))
+            targets.append(dict(client='pc',hwnd=s.hwnd,pid=s.pid,created=s.created,exe=s.exe,title=title,label=f'{pc_distribution(s.exe)} 桌面端（实验性） · 进程 {s.pid} · 窗口 {s.hwnd:X} · {s.width}×{s.height}'))
     targets=list({t['hwnd']:t for t in targets}.values())
     from launcher import find_adb
     cfg=settings.setdefault('mumu',{})
@@ -419,7 +422,9 @@ def mainline_run(request,control):
             else:cycle.wait(control)
         except TaskAttention as exc:
             control.status(scene=r.s.get('screen',scene))
-            control.attention(exc)
+            receipt=control.attention(exc)
+            from entry_preflight import acknowledge_capacity_continue
+            acknowledge_capacity_continue(r,exc.code,receipt)
             if exc.code not in ('flow','client_input','entry_not_sent'):r.ticket=None
             if exc.code=='flow':r.mode_since=time.time()
             pacer.reset();stability.reset();planning.reset();r.s.pop('attention',None);r.save()

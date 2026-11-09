@@ -101,7 +101,19 @@ def classify(o):
         start=one(o,'战斗开始',(.60,.85,.74,.98),.98)
         npc=one(o,'NPC对战',(.62,.73,.75,.82),.98)
         opponents=[t for t in o.tokens if o.in_region(t,(.60,.68,.755,.75)) and t.score is not None and t.score>=.98]
-        if start and npc and len(opponents)==1:
+        quick=one(o,'快速对战',(.60,.85,.74,.98),.98)
+        daily=one(o,'本日快速对战剩余次数',(.35,.87,.51,.93),.98)
+        daily_counts=[t for t in o.tokens if o.in_region(t,(.39,.92,.47,.97))
+                      and re.fullmatch(r'\d{1,4}/\d{1,4}',norm(t.text))
+                      and t.score is not None and t.score>=.98]
+        has_start=any(norm(t.text)=='战斗开始' for t in o.tokens)
+        has_quick=any(norm(t.text)=='快速对战' for t in o.tokens)
+        quick_layout=bool(quick and not has_start and daily and len(daily_counts)==1
+                          and 'arena_normal_mode_toggle' in o.visuals)
+        if quick_layout:
+            remaining,maximum=map(int,norm(daily_counts[0].text).split('/'))
+            quick_layout=0<=remaining<=maximum and maximum>0
+        if ((start and not has_quick) or quick_layout) and npc and len(opponents)==1:
             costs=[t for t in o.tokens if o.in_region(t,(.54,.87,.62,.96)) and re.fullmatch(r'\d{1,4}/\d{1,5}',norm(t.text)) and t.score is not None and t.score>=.98]
             if len(costs)==1:
                 cost,stock=map(int,norm(costs[0].text).split('/'))
@@ -109,6 +121,13 @@ def classify(o):
                     raise TaskAttention('arena_cost','NPC对战费用不符合预期','当前仅允许每把1张现有挑战书，不猜测费用。')
                 if stock<cost:
                     raise TaskAttention('arena_resource','挑战书不足','不打开购买或兑换。')
+                if quick_layout:
+                    # This is ONLY the adjacent free mode switch, never the
+                    # resource-spending quick battle button or an entry target.
+                    target=Token('切换普通战斗',o.width*.723,o.height*.878,
+                                 o.width*.046,o.height*.085,
+                                 source='arena_normal_mode_toggle',score=1)
+                    return Reading('arena_quick_team',target,opponents[0].text,stock,cost)
                 return Reading('arena_team',start,opponents[0].text,stock,cost)
         title=one(o,'NPC交战对手',(.22,.11,.45,.21),.98)
         tab=one(o,'NPC对战',(.81,.24,.95,.36),.98)

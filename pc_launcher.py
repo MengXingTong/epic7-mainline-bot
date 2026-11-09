@@ -5,13 +5,14 @@ from pathlib import Path
 CODE_ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(CODE_ROOT));sys.path.insert(0,str(CODE_ROOT/'vendor'))
 from ui_text import ChineseArgumentParser,error_text
+from pc_clients import pc_distribution
 
 def load_settings(path):
     cfg=json.loads(path.read_text(encoding='utf-8-sig'))
     if cfg.get('backend')!='stove_pc':raise RuntimeError('旧版桌面端配置必须明确选择 stove_pc 后端。')
     pc=cfg.get('pc',{})
-    if not Path(pc.get('game_exe','')).is_absolute() or Path(pc.get('game_exe','')).name.lower()!='epicseven.exe':
-        raise RuntimeError('请配置本机游戏进程 EpicSeven.exe 的准确路径。')
+    if not Path(pc.get('game_exe','')).is_absolute() or pc_distribution(pc['game_exe']) is None:
+        raise RuntimeError('请配置本机游戏进程 EpicSeven.exe（STOVE）或 EpicSeven_Steam.exe（Steam）的准确路径。')
     if not pc.get('server') or not str(pc.get('account_id','')).isdigit():raise RuntimeError('旧版启动流程需要服务器和纯数字服务器账号编号。')
     if not cfg.get('data_dir') or not Path(cfg['data_dir']).is_absolute():raise RuntimeError('请明确选择已有账号进度目录；不会创建空记录。')
     pc['account_id']=str(pc['account_id'])

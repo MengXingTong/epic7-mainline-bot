@@ -1,4 +1,4 @@
-"""Experimental STOVE PC transport. Importing this module never touches Windows.
+"""Experimental STOVE/Steam PC transport. Importing this module never touches Windows.
 
 Native API calls are isolated behind an injectable adapter for offline tests.
 No activation, login, server switching, installation or privilege bypass is done.
@@ -9,6 +9,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import os, time, hashlib
 import numpy as np
+from pc_clients import pc_distribution
 
 class PcSafetyError(RuntimeError):
     pass
@@ -227,7 +228,7 @@ class PcBackend:
 class Win32Api:
     """Foreground screen-copy backend; no PostMessage, hooks or game-memory access."""
     def __init__(self):
-        if os.name!='nt':raise PcSafetyError('实验性 STOVE 桌面端适配仅可在 Windows 上运行。')
+        if os.name!='nt':raise PcSafetyError('实验性 STOVE/Steam 桌面端适配仅可在 Windows 上运行。')
         import ctypes as c
         from ctypes import wintypes as w
         self.c=c;self.w=w
@@ -300,7 +301,7 @@ class Win32Api:
     def windows(self,exe,title):
         # Empty path is discovery-only; returned identity is pinned before input.
         path=os.path.normcase(os.path.abspath(exe)) if exe else None
-        if path and Path(path).name.lower()!='epicseven.exe':raise PcSafetyError('仅允许选择游戏进程 EpicSeven.exe。')
+        if path and pc_distribution(path) is None:raise PcSafetyError('仅允许选择游戏进程 EpicSeven.exe（STOVE）或 EpicSeven_Steam.exe（Steam）。')
         c,w=self.c,self.w;result=[]
         with self.dpi():
             for hwnd in self._windows():
@@ -308,7 +309,7 @@ class Win32Api:
                 buf=c.create_unicode_buffer(1024);self.u.GetWindowTextW(hwnd,buf,len(buf))
                 if buf.value!=title:continue
                 pid=w.DWORD();self.u.GetWindowThreadProcessId(hwnd,c.byref(pid));p=self._process(pid.value)
-                if not p or Path(p[0]).name.lower()!='epicseven.exe':continue
+                if not p or pc_distribution(p[0]) is None:continue
                 if path and os.path.normcase(os.path.abspath(p[0]))!=path:continue
                 r=w.RECT();point=w.POINT(0,0)
                 if not self.u.GetClientRect(hwnd,c.byref(r)) or not self.u.ClientToScreen(hwnd,c.byref(point)):continue

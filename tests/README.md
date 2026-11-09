@@ -103,3 +103,8 @@ Actual client screenshots/OCR/navigation evidence stay under ignored `.local`, n
 ## 章末裁切故事结果的严格两行分支
 
 `test_recorded_clipped_story_results.py` 覆盖当前原故事的同run/同窗口绑定、唯一sent与来源哈希、完整实际播放/免费奖励链及原证据路径、两行连续编号/间距/后继锁、独立通关勾和未知弹层优先。真实Runner专项核对只完成原故事、不重开入口，attempted/sent不变；另验证纯剧情active不能认领后续战斗/胜利/战斗结算。私有原画面仅在隔离状态副本做生产OCR回放，缺失则跳过；不恢复或修改实际旧进度，不提交账号素材，不向游戏发送测试输入。
+
+
+## 容量处理继续与准备页返回
+
+`test_capacity_continue.py` 的28项测试使用生成页面、可控时钟和伪输入，覆盖真实Control的继续回执、同run容量→继续→队伍/辅助逐级返回→地图重验→首次实际入场、三种容量、重复弹窗幂等、新拒绝与新继续、原入场/发送完整保留、旧继续不可复用、地图缺失/过期/跨run、真实接受或战斗/战败禁止重发、未知/教学/资源遮罩、目标/几何/帧时效、留证/写盘失败、未知发送及有界返回。另验证主线worker确实将attention返回的新命令交给拒绝台账。全部不连接设备、不操作游戏/助手窗口，也不修改真实任务。`test_entry_preflight.py` 保留原拒绝与跨run接续回归，其伪地图票据同步提供生产已有的verified_epoch，不放松实际地图有效期。

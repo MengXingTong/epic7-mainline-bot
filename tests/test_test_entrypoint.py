@@ -84,7 +84,7 @@ class TestEntrypointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='epic7-worker-entry-') as folder:
             root = Path(folder)
             for name in ('assistant_worker.py', 'ui_text.py', 'assistant_config.py',
-                         'task_blockers.py', 'task_timing.py', 'pc_backend.py'):
+                         'task_blockers.py', 'task_timing.py', 'pc_backend.py', 'pc_clients.py'):
                 shutil.copy2(entry.ROOT / name, root)
             vendor = root / 'vendor'
             vendor.mkdir()

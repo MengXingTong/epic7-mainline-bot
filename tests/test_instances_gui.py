@@ -29,8 +29,8 @@ class MultiWindowGuiTests(unittest.TestCase):
                     a = Assistant(first, ui_check=True, home=base, base_home=base)
                     b = Assistant(second, ui_check=True, home=base/'instances'/'2', slot_number=2, base_home=base)
                     self.assertIn('#1', first.title());self.assertIn('#2', second.title())
-                    a.targets=[{'client':'pc','label':'PC 1'}];a.filter_targets()
-                    b.targets=[{'client':'mumu','label':'MuMu 2'}];b.filter_targets()
+                    a.targets=[{'client':'pc','label':'PC 1','hwnd':1,'pid':2,'created':3,'exe':'EpicSeven.exe'}];a.filter_targets()
+                    b.targets=[{'client':'mumu','label':'MuMu 2','serial':'127.0.0.1:16416','package':'example.game'}];b.filter_targets()
                     a.run_dir=a.home/'runs'/'first';a.run_id='first'
                     b.run_dir=b.home/'runs'/'second';b.run_id='second'
                     a.command('pause');b.command('stop')

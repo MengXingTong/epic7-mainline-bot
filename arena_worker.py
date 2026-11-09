@@ -31,7 +31,9 @@ def read_observation(image,ocr,captured_at):
             verified.append(float(score))
         if len(verified)==2:
             obs.tokens.append(Token(original.text,original.x,original.y,original.w,original.h,source='arena_opponent_double_read',score=min(verified)))
-    if one(obs,'新手竞技场',(.025,0,.22,.10),.98) and one(obs,'战斗开始',(.60,.85,.74,.98),.98) and one(obs,'NPC对战',(.62,.73,.75,.82),.98):
+    if (one(obs,'新手竞技场',(.025,0,.22,.10),.98)
+        and (one(obs,'战斗开始',(.60,.85,.74,.98),.98) or one(obs,'快速对战',(.60,.85,.74,.98),.98))
+        and one(obs,'NPC对战',(.62,.73,.75,.82),.98)):
         import re
         costs=[t for t in obs.tokens if obs.in_region(t,(.54,.87,.62,.96)) and re.fullmatch(r'\d{1,4}/\d{1,5}',norm(t.text)) and t.score is not None and .90<=t.score<.98]
         if len(costs)==1:
@@ -179,7 +181,17 @@ def run(request,control):
                         challenge=one(obs,'挑战',(.43,.86,.56,.97),.98)
                         if challenge:
                             r=Reading('arena_npc',challenge,r.opponent);kind='challenge'
+                elif r.scene=='arena_quick_team':
+                    if j.normal_mode_context(r,snap.binding):kind='normal_mode'
+                    else:control.status('NPC快速准备页：等待普通战斗状态；不点击快速对战、不重复切换或入场。',mode='waiting_evidence')
                 elif r.scene=='arena_team':
+                    if j.normal_mode_pending():
+                        if j.normal_mode_observation_ready(r,snap.binding,snap.captured_at):
+                            evidence=j.evidence(snap,obs,r)
+                            j.observe_normal_mode(r,evidence,snap.binding)
+                        if j.normal_mode_pending():
+                            control.status('普通战斗模式尚未与原切换来源核实；零输入观察，不补发。',mode='waiting_evidence')
+                            cycle.wait(control);continue
                     if j.entry_chain_matches(r,snap.binding):kind='entry'
                     else:
                         if ('arena_native_back' in obs.visuals
