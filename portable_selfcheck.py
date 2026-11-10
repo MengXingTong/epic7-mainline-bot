@@ -18,7 +18,7 @@ def worker_check():
     import tutorial_control_templates,tutorial_team_dialog,tutorial_battle_confirmation
     import mumu_discovery,assistant_instances,pc_clients
     assert pc_clients.pc_distribution('EpicSeven_Steam.exe')=='Steam'
-    import ui_control_guard,chat_recovery,battle_auto_control,battle_settings
+    import ui_control_guard,chat_recovery,battle_auto_control,battle_settings,walking_map
     import arena_core,arena_worker,arena_journal,arena_vision,arena_recovery
     import theater_core,theater_journal,theater_worker,theater_directory
     import theater_ticket_ocr,theater_pending_confirmation

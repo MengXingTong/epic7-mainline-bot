@@ -26,6 +26,26 @@ from rapidocr_onnxruntime import RapidOCR
 TZ = dt.timezone(dt.timedelta(hours=8))
 def now(): return dt.datetime.now(TZ).isoformat(timespec='seconds')
 def norm(s): return re.sub(r'[\s，。！？：:,.!?·…+－_—\-|ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIl]+', '', s).lower()
+def evidence_filename_prefix(label):
+    """Storage-only Windows-safe name; never rewrite the business identity.
+
+    Retain a readable fragment and a hash of the EXACT original label. Bound
+    UTF-16 units (not Python characters), and let exclusive temp-file creation
+    distinguish repeated captures even within the same clock tick.
+    """
+    if not isinstance(label,str):raise TypeError('证据标签必须是字符串。')
+    original=label.encode('utf-8',errors='surrogatepass')
+    clean=re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]','-',label)
+    fragment=[];units=0
+    for char in clean:
+        if 0xD800<=ord(char)<=0xDFFF:char='-'
+        size=2 if ord(char)>0xFFFF else 1
+        if units+size>64:break
+        fragment.append(char);units+=size
+    slug=''.join(fragment).strip(' .') or 'evidence'
+    return f"{dt.datetime.now(TZ):%H%M%S}-{slug}-{hashlib.sha256(original).hexdigest()[:16]}-"
+
+
 def atomic_json(path, value, *, compact=False):
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_text(json.dumps(value, ensure_ascii=False, indent=None if compact else 2, separators=(',',':') if compact else None), encoding='utf-8')
@@ -204,6 +224,12 @@ def mainline_map_control(f):
     if story and story['score']>=.85:candidates.append(dict(kind='story_only',target=story))
     return candidates[0] if len(candidates)==1 else None
 
+def unknown_scene_diagnostic(f):
+    """Read-only explanation, never an input or guessed map identity permit."""
+    return dict(code='unknown_scene',reason=
+        '当前画面尚无已核实控件，继续零输入观察；不套用旧CLI的CG点击或长按。')
+
+
 def classify(f):
     # Vetoes are ordered before EVERY action, including every kind of confirmation.
     if capacity_blocker(w['text'] for w in f.words):return 'capacity_stop'
@@ -311,6 +337,8 @@ class Runner:
         ocr_finished=time.perf_counter()
         f=Frame(im,results,(w,h));f.at=captured_at
         from tutorial_ocr import strengthen_actor,strengthen_enemy_levels,strengthen_chapter_reward_thresholds,strengthen_orbis_unlock_notice,strengthen_summon_promo_title,strengthen_owned_unit_levels,strengthen_preparation_cost,strengthen_free_single_summon_label,strengthen_wishlist_close,strengthen_wishlist_count,strengthen_spirit_altar_purpose,strengthen_owned_card_level,strengthen_preparation_entry_label,strengthen_map_stage_number,strengthen_map_row_label
+        from walking_map import strengthen_walking_map_title
+        strengthen_walking_map_title(f,self.ocr)
         strengthen_map_stage_number(f,self.ocr)
         strengthen_map_row_label(f,self.ocr)
         strengthen_actor(f,self.ocr)
@@ -365,21 +393,31 @@ class Runner:
     def save_observation(self):
         if getattr(self,'_saved_observation',None)!=self._observation_signature():self.save()
     def evidence(self,label):
-        p=ROOT/'evidence'/f"{dt.datetime.now(TZ):%H%M%S}-{label}.png"; p.parent.mkdir(exist_ok=True)
-        p.write_bytes(cv2.imencode('.png',self.frame.image)[1].tobytes())
-        return str(p.relative_to(ROOT))
+        # Evidence is a critical immutable record, not a latest-display copy.
+        # Any encode/create/write/flush/fsync/close failure must stop input.
+        prefix=evidence_filename_prefix(label)
+        ok,encoded=cv2.imencode('.png',self.frame.image)
+        if not ok:raise RuntimeError('关键证据截图编码失败；未保存证据，不继续输入。')
+        payload=encoded.tobytes()
+        root=Path(ROOT).resolve();folder=root/'evidence';folder.mkdir(exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='wb',dir=folder,prefix=prefix,suffix='.png',delete=False) as stream:
+            p=Path(stream.name)
+            if stream.write(payload)!=len(payload):raise OSError('关键证据截图未完整写入；不继续输入。')
+            stream.flush();os.fsync(stream.fileno())
+        return str(p.relative_to(root))
     def ensure_game(self):
         if getattr(self,'pc',None):
             self.pc.ensure();return
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf8',errors='replace')
-        resumed=[line for line in activity.splitlines() if 'topResumedActivity' in line or 'mResumedActivity' in line]
-        if not any(self.cfg['package'] in line for line in resumed):
+        from mumu_discovery import resumed_package
+        if resumed_package(activity)!=self.cfg['package']:
             raise RuntimeError('模拟器前台应用不是已授权的游戏；未发送输入。')
     def _can_replan_ui(self,kind):
         # Exact ordinary control + scene, not an arbitrary Confirm or an entry.
         ordinary={
             '未通关验证通过，准备战斗':'map','避开已通关关卡，选择下一关':'map',
             '完成本章后进入下一章':'map','选择当前队伍':'support',
+            '入场前取消后重新核实原关准备页':'map','入场前取消后选择原关队伍':'support',
             '确认通关结算':'settlement','关闭已发放的免费奖励遮罩':'story_reward',
             '跳过剧情':'story','确认跳过剧情':'skip_confirm','通关星级页继续至结算':'victory',
         }
@@ -477,6 +515,14 @@ class Runner:
                 or not 0<=time.time()-setting_proof['captured_at']<=.75):
             from pc_backend import FrameExpired
             raise FrameExpired('战斗设置发送前即时状态复核已过期；未发送，重新观察。')
+        # First-entry intent is consumed only at the actual input boundary,
+        # AFTER input-free target/freshness/business checks. A guard failure is
+        # not an attempted backend call and must not become an unknown send.
+        boundary=getattr(self,'_entry_dispatch_boundary',None)
+        if boundary is not None:
+            if getattr(self,'_prepared_entry_action',None)!=kind:
+                raise RuntimeError('首次入场发送边界与操作不一致；未调用输入。')
+            boundary(kind)
         if getattr(self,'pc',None):self.pc.tap(x,y)
         else:self.adb('shell','input','tap',*coords)
         if guarded:self.save()  # Free skip intent/evidence was saved before input.
@@ -491,6 +537,9 @@ class Runner:
             self.adb('shell','input','swipe',round(start[0]*w/1600),round(start[1]*h/900),round(end[0]*w/1600),round(end[1]*h/900),450)
     def back(self,why):
         self.ensure_game()
+        if not 0<=time.time()-self.frame.at<=5:
+            from pc_backend import NavigationFrameExpired
+            raise NavigationFrameExpired('原生返回在输入前观察过期；重新核实当前页。')
         self.input_sequence=getattr(self,'input_sequence',0)+1
         event('back',reason=why); self.s['last_action']='返回主线重新验证'; self.save()
         if getattr(self,'pc',None):self.pc.back()
@@ -506,6 +555,7 @@ class Runner:
         self.archive_unresolved_active('新任务从当前画面继续，旧入场不再用于推断本次结算')
         self.s.update(terminal=False,status='从当前画面继续',reason='不回查旧关，不自动重试；原始记录完整留档')
         self.s.pop('attention',None);self.save()
+        self.current_screen_start=True
     def archive_unresolved_active(self,why):
         active=self.s.get('active')
         if active:
@@ -871,7 +921,7 @@ class Runner:
         if mode=='unknown' and getattr(self,'run_id',None):
             # Unified runs never promote an unrecognized CG/narration to a
             # centre click/hold. Wait for a real current control or map fact.
-            return self.observe_progress_evidence('unknown_scene',dict(code='unknown_scene',reason='当前画面尚无已核实控件，继续零输入观察；不套用旧CLI的CG点击或长按。'))
+            return self.observe_progress_evidence('unknown_scene',unknown_scene_diagnostic(f))
         # Full-screen CG: only during a recorded run, no popup labels, no battle HUD.
         a=self.s.get('active')
         if not self.cfg.get('new_account_tutorial',False) and a and age>=12 and time.time()-self.battle_seen>12 and time.time()-self.last_gesture>25 and self.unknown_gestures<2:

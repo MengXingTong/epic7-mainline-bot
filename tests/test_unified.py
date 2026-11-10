@@ -202,6 +202,33 @@ class FrameGuardTests(unittest.TestCase):
         t.api.button.assert_not_called()
 
 
+class MuMuCurrentAppTests(unittest.TestCase):
+    def transport(self,package='org.vendor.channel'):
+        target=dict(MU,package=package)
+        transport=UnifiedTransport({'mumu':{'adb':'unused'}},target)
+        transport.adb=Mock(return_value=f'topResumedActivity=ActivityRecord{{a u0 {package}/.Main t1}}'.encode())
+        return transport
+    def test_channel_package_is_accepted_without_default_package(self):
+        t=self.transport();self.assertEqual(t.ensure(),MU['serial'])
+        t.adb.assert_called_once_with('shell','dumpsys','activity','activities')
+    def test_app_switch_and_missing_foreground_stop_before_input(self):
+        for value in (b'topResumedActivity=another.application/.Main',b'mResumedActivity: null',
+                      b'topResumedActivity=prefix.org.vendor.channel/.Main'):
+            with self.subTest(value=value):
+                t=self.transport();t.adb.return_value=value
+                with self.assertRaisesRegex(RuntimeError,'未发送输入'):t.ensure()
+                self.assertEqual(len(t.adb.call_args_list),1)
+    def test_mainline_binds_exact_actual_package_and_stops_on_app_change(self):
+        from runner import Runner
+        r=Runner.__new__(Runner);r.cfg={'package':'org.vendor.channel'}
+        r.adb=Mock(return_value=b'mResumedActivity: ActivityRecord{a u0 org.vendor.channel/.Main t1}')
+        r.ensure_game()
+        for value in (b'topResumedActivity=prefix.org.vendor.channel/.Main',b'topResumedActivity=org.vendor.channel.other/.Main',b'mResumedActivity: null'):
+            with self.subTest(value=value):
+                r.adb.return_value=value
+                with self.assertRaisesRegex(RuntimeError,'未发送输入'):r.ensure_game()
+
+
 class WindowLayoutTests(unittest.TestCase):
     def test_workarea_bounds_at_common_and_scaled_sizes(self):
         for width,height in ((1920,1040),(1536,832),(1280,680),(1024,728),(640,440),(480,300)):

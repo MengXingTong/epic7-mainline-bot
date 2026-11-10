@@ -332,7 +332,7 @@ def mainline_run(request,control):
     os.environ.update(EPIC7_DATA_DIR=str(root),EPIC7_CONFIG_PATH=str(config_file))
     import runner
     runner.ROOT=root
-    from runner import Runner,classify,victory_objectives_verified
+    from runner import Runner,classify,victory_objectives_verified,unknown_scene_diagnostic
     class ControlledRunner(Runner):
         def stop(self,status,reason):
             if status=='安全暂停待修复':raise TaskAttention('flow','当前步骤等待处理',reason)
@@ -370,6 +370,9 @@ def mainline_run(request,control):
                 from story_open_ack import seed_original_open
                 r.capture()  # Fresh positive page, never an input.
                 seed_original_open(r,proof['seed_story_open_ack'],proof)
+            if proof.get('seed_guard_continuation'):
+                from entry_preparation import register_guard_continuation
+                register_guard_continuation(r,proof['seed_guard_continuation'],proof)
             r.s.setdefault('mainline_maintenance_reloads',[]).append(proof)
             r.s.pop('attention',None);r.save()
         else:r.start_current_screen()
@@ -396,7 +399,14 @@ def mainline_run(request,control):
             if needs_stability_wait(scene,victory_verified=scene=='victory' and victory_objectives_verified(frame)):
                 if stability.waiting(scene,frame.image,getattr(frame,'words',())):
                     r.mode_since=time.time()
-                    control.status('正在等待画面和控件稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=scene)
+                    if scene=='unknown':
+                        # Motion is not the reason an unidentified page cannot be
+                        # used. Explain the current frame without bypassing the
+                        # stability gate or authorizing any guessed navigation.
+                        diagnostic=unknown_scene_diagnostic(frame)
+                        control.status(diagnostic['reason'],mode='waiting_evidence',scene=scene)
+                    else:
+                        control.status('正在等待画面和控件稳定；变化期间持续观察，不发送输入。',mode='waiting_scene',scene=scene)
                     cycle.wait(control);continue
             else:
                 # Known controls and business interrupts outrank background animation,
@@ -514,7 +524,7 @@ def prepare_selected_profile(request,control):
         raw=cv2.resize(np.array(snap.image)[:,:,::-1].copy(),(1600,900))
         ocr=RapidOCR(intra_op_num_threads=2,inter_op_num_threads=2);results,_=ocr(raw)
         scene=classify(Frame(raw,results))
-        if scene not in ('map','lobby'):
+        if scene not in ('map','lobby','legacy_story_map'):
             verified_dimension=False;verified_theater=False;verified_penguin=False
             if settings.get('task')=='dimension':
                 from abyss_core import Observation,Token

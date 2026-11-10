@@ -327,22 +327,47 @@ def strengthen_owned_card_level(f,ocr):
 
 
 def strengthen_preparation_entry_label(f,ocr):
-    """Separate the single-entry label from its glitter, never a repeat button."""
-    for text,region in (('准备战斗',(60,10,260,80)),('闯关成功',(1180,200,1380,255)),('完成故事',(1180,245,1380,295)),('1名以上英雄存活',(1180,280,1450,330)),('管理队伍',(25,815,200,899))):
-        x1,y1,x2,y2=region
-        if len([w for w in f.words if w['text']==text and w['score']>=.98 and x1<w['x']<x2 and y1<w['y']<y2])!=1:return
+    """Read one current single-entry field when decoration contaminates it.
+
+    Three native passive mission rows describe optional objectives; neither
+    their specific wording nor chapter identity is an input permission.
+    """
+    legacy=True
+    for text,(x1,y1,x2,y2) in (('准备战斗',(60,10,260,80)),('闯关成功',(1180,200,1380,255)),
+        ('完成故事',(1180,245,1380,295)),('1名以上英雄存活',(1180,280,1450,330)),('管理队伍',(25,815,200,899))):
+        if len([w for w in f.words if w['text']==text and w['score']>=.98
+                and x1<w['x']<x2 and y1<w['y']<y2])!=1:legacy=False
+    if not legacy:
+        anchors=[]
+        for text,region in (('准备战斗',(60,10,260,80)),('闯关成功',(1180,200,1380,255)),
+                            ('登场的敌人',(1180,330,1450,395)),('管理队伍',(25,815,200,899))):
+            x1,y1,x2,y2=region
+            words=[w for w in f.words if w['text']==text and w['score']>=.98
+                   and x1<w['x']<x2 and y1<w['y']<y2]
+            if len(words)!=1:return
+            anchors+=words
+        objectives=[anchors[1]]
+        for y1,y2 in ((245,290),(290,325)):
+            words=[w for w in f.words if re.fullmatch(r'.{4,40}',w['text'])
+                   and w['score']>=.95 and 1180<=w['x']<=1550 and y1<=w['y']<=y2]
+            if len(words)!=1:return
+            objectives+=words
+        from story_core import _native_mission_glyphs
+        if not _native_mission_glyphs(f,objectives):return
     if any(w['text']=='进行任务' and w['score']>=.98 and 1300<w['x']<1599 and 770<w['y']<899 for w in f.words):return
-    source=[w for w in f.words if re.fullmatch(r'进行任务[+＋*✦\s]*',w['text']) and w['score']>=.85 and 1300<w['x']<1599 and 770<w['y']<899]
-    if len(source)!=1:return
-    reads=[]
-    for scale in (2,):
-        crop=cv2.resize(f.image[806:855,1370:1490],None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
-        rows,_=ocr(crop,use_det=False,use_cls=False)
-        if not rows or len(rows)!=1 or len(rows[0])!=2:return
-        text,score=rows[0]
-        if text!='进行任务' or score<.98:return
-        reads.append(float(score))
-    f.words.append(dict(text='进行任务',score=min(reads),x=1430,y=830.5,box=[[1370,806],[1490,806],[1490,855],[1370,855]],source='current_preparation_single_entry_label_field_read',verification_scores=reads))
+    source=[w for w in f.words if re.fullmatch(r'[←→↔+＋*✦\s]*进行任务[+＋*✦\s]*',w['text'])
+            and w['score']>=.85 and 1300<w['x']<1599 and 770<w['y']<899]
+    if len(source)!=1 or getattr(f,'preparation_entry_read',False):return
+    f.preparation_entry_read=True
+    crop=cv2.resize(f.image[806:855,1370:1490],None,fx=2,fy=2,interpolation=cv2.INTER_CUBIC)
+    rows,_=ocr(crop,use_det=False,use_cls=False)
+    if not rows or len(rows)!=1 or len(rows[0])!=2:return
+    text,score=rows[0]
+    if text!='进行任务' or score<.98:return
+    f.words.append(dict(text=text,score=float(score),x=1430,y=830.5,
+        box=[[1370,806],[1490,806],[1490,855],[1370,855]],
+        source='current_preparation_single_entry_label_field_read',captured_at=f.at,
+        original_ocr=copy.deepcopy(source[0]),verification_scores=[float(score)]))
 
 
 def strengthen_map_stage_number(f,ocr):
@@ -486,9 +511,11 @@ def strengthen_preparation_power_label(f,ocr):
         if len([w for w in f.words if w['text']==label and w['score']>=.98
                 and x1<=w['x']<=x2 and y1<=w['y']<=y2])!=1:return
     if any(w['text']=='队伍战斗力' and w['score']>=.98 and 300<=w['x']<=560 and 770<=w['y']<=835 for w in f.words):return
-    sources=[w for w in f.words if re.fullmatch(r'[▲△▴]\s*队伍战斗力',w['text'])
+    sources=[w for w in f.words if re.fullmatch(r'[▲△▴\-−一·—–－]?\s*队伍战斗力',w['text'])
              and w['score']>=.85 and 300<=w['x']<=560 and 770<=w['y']<=835]
     if len(sources)!=1:return
+    if getattr(f,'preparation_power_read',False):return
+    f.preparation_power_read=True
     crop=f.image[787:827,347:473]
     image=cv2.resize(crop,(round(crop.shape[1]*48/crop.shape[0]),48),interpolation=cv2.INTER_CUBIC)
     rows,_=ocr(image,use_det=False,use_cls=False)
@@ -496,7 +523,7 @@ def strengthen_preparation_power_label(f,ocr):
     text,score=rows[0]
     if text!='队伍战斗力' or score<.98:return
     f.words.append(dict(text=text,score=float(score),x=410,y=807,
-        box=[[347,787],[473,787],[473,827],[347,827]],source='current_preparation_power_label_field_read',
+        box=[[347,787],[473,787],[473,827],[347,827]],source='current_preparation_power_label_field_read',captured_at=f.at,
         original_ocr=copy.deepcopy(sources[0]),verification_scores=[float(score)]))
 
 

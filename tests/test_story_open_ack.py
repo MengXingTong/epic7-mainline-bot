@@ -205,6 +205,7 @@ class StoryOpenAckTests(unittest.TestCase):
         r=fake_runner(frame());r.run_id='new-run';r.pc=None;r.cfg.update(serial='known',package='known')
         d=copy.deepcopy(self.r.map_ticket.return_value[0]);r.ticket=copy.deepcopy(d)
         before=[];r.save.side_effect=lambda:before.append(copy.deepcopy(r.s))
+        r.action.side_effect=lambda action,target:r._entry_dispatch_boundary(action)
         def fresh_target():r.frame=frame();return r.frame
         r.capture=Mock(side_effect=fresh_target)
         r.open_story_node(d,runner.mainline_map_control(r.frame)['target'])
@@ -212,6 +213,9 @@ class StoryOpenAckTests(unittest.TestCase):
         self.assertEqual(record['phase'],'awaiting_acceptance');self.assertEqual(record['run_id'],'new-run')
         self.assertEqual(before[0]['entry_dispatches'][self.key][0]['status'],'reserved')
         r.action.assert_called_once();self.assertEqual(r.s['completed'],{})
+        self.assertEqual(r.s['entry_dispatches'][self.key][0]['status'],'sent')
+        receipt=next((self.root/'evidence').glob('entry-invocation-*.json'))
+        self.assertEqual(json.loads(receipt.read_text(encoding='utf8'))['input_boundary'],'called')
     def test_initial_register_is_before_send_and_never_completed(self):
         self.assertEqual(self.record['phase'],'awaiting_acceptance');self.assertEqual(self.record['messages'],[])
         self.unchanged()

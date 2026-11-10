@@ -6,10 +6,11 @@ Only Saint 3-7 may repeat, and only after a durable successful clear; never on d
 from __future__ import annotations
 import copy,re,time,uuid
 import cv2,numpy as np
+from walking_map import walking_map_info,WalkingMapAdapter
 
 SAINT_BOOK='saint_eulogy'
 SAINT_STAGE='3-7'
-STAGE_RE=re.compile(r'^\s*([1-9])\s*[-−–—一]\s*(\d{1,2})[.．、。\s]*(.*)')
+STAGE_RE=re.compile(r'^\s*([1-9]\d{0,2})\s*[-−–—一]\s*([1-9]\d{0,2})(?!\d)[.．、。\s]*(.*)')
 
 def stage_id(text):
     match=STAGE_RE.match(text)
@@ -32,6 +33,8 @@ def read_stage(f):
     return dict(rows[0],region=region)
 
 def map_info(f):
+    walking=walking_map_info(f)
+    if walking:return walking
     if not f.find('准备战斗',(1100,750,1599,899)) or f.find('Episode',(0,0,500,90)):return None
     rows=[]
     for word in f.words:
@@ -174,6 +177,30 @@ def _native_mission_glyphs(f,objectives):
     return True
 
 
+def _preparation_field_frame(f):
+    """Use a bound current field, not count its weak original as a new control.
+
+    Original OCR remains in f.words and in the supplement's original_ocr. A
+    duplicate/changed source or a stale/unbound supplement cannot strengthen it.
+    """
+    if getattr(f,'preparation_fields_resolved',False):return f
+    hidden=set()
+    for source in ('current_preparation_power_label_field_read','current_preparation_single_entry_label_field_read'):
+        reads=[w for w in f.words if w.get('source')==source]
+        if len(reads)!=1:continue
+        read=reads[0];original=read.get('original_ocr')
+        originals=[w for w in f.words if w.get('source')!=source and w==original]
+        if (read.get('captured_at')==f.at and read['score']>=.98
+            and read.get('verification_scores')==[read['score']]
+            and len(originals)==1 and originals[0]['score']<.98):
+            hidden.add(id(originals[0]))
+        else:hidden.add(id(read))
+    if not hidden:return f
+    current=copy.copy(f);current.words=[w for w in f.words if id(w) not in hidden]
+    current.preparation_fields_resolved=True
+    return current
+
+
 def _native_story_team_target(f):
     """Fixed story party with one separate, non-starting hosted control.
 
@@ -182,6 +209,7 @@ def _native_story_team_target(f):
     Only the ordinary single-task button is returned; map/title/cost/history
     remain Runner and first-entry-dispatch obligations.
     """
+    f=_preparation_field_frame(f)
     # Objectives describe optional achievements, not input instructions. Read
     # both complete passive rows with their three native mission glyphs instead
     # of maintaining a per-hero/per-survivor/per-chapter text allowlist.
@@ -238,6 +266,7 @@ def _legacy_story_team_target(f):
 
 def _team_entry_layout(f):
     """Read the preparation layout; hosted/repeat controls are never tap targets."""
+    f=_preparation_field_frame(f)
     unknown=dict(kind='unknown',target=None,proof='队伍准备页完整布局或唯一普通单次入口尚未核实；不以AUTO作为入场条件')
     from tutorial_core import owned_hero_selector_visible
     if owned_hero_selector_visible(f):return unknown
@@ -327,11 +356,11 @@ def _team_entry_layout(f):
     return dict(kind='single_task',target=anchors[-1],
                 proof='已识别准备标题、两处独立托管控件、队伍战斗力、管理队伍和唯一普通单次入口；AUTO与辅助英雄占位不作为入场条件，未操作托管或确认战斗内自动开关')
 
-def entry_cost(f):
+def entry_cost(f,*,allow_zero=False):
     word=f.find(r'^\d+\s*/\s*\d+$',(1180,775,1400,890))
     if not word or word['score']<.90:return None
     required,available=map(int,re.fullmatch(r'(\d+)\s*/\s*(\d+)',word['text']).groups())
-    return (required,available) if 0<required<=100 else None
+    return (required,available) if (0 if allow_zero else 1)<=required<=100 else None
 
 class StoryController:
     def __init__(self,runner,settings):
@@ -343,8 +372,15 @@ class StoryController:
         self.context=self.context or self.book_id is not None
         self.entry_wait_until=0
         self.selection_failures={}
+        self.walking=WalkingMapAdapter(self)
         if self.book_id in root.get('books',{}):
             old=self.book;old['mode']='farm' if self.goal and (SAINT_STAGE in old.get('stages',{}) or old.get('mode')=='farm') else 'progress'
+            active=old.get('active')
+            if (old.get('walking_map') and not self.goal and active
+                and getattr(runner,'current_screen_start',False)
+                and (active.get('map_binding') or {}).get('run_id')!=getattr(runner,'run_id',None)):
+                old.setdefault('unresolved_entries',[]).append(dict(at=time.time(),reason='显式新开始完整归档原行走入场；不认领本次结果、不删除原入场或补记完成',entry=copy.deepcopy(active)))
+                old['active']=None;runner.save()
     @property
     def book(self):
         root=self.r.s.setdefault('story_progress',{'schema':1,'books':{}})
@@ -359,6 +395,7 @@ class StoryController:
         if chapter:self.book.setdefault('chapter_regions',{})[str(chapter)]=region
         self.r.s['story_progress']['current_book']=self.book_id
     def desired_stage(self):
+        if self.walking.enabled:return self.walking.desired()
         if self.goal and (self.book.get('mode')=='farm' or SAINT_STAGE in self.book.get('stages',{})):return SAINT_STAGE
         route=self.book.get('region_route',{})
         if route.get('from_stage')==self.book.get('last_cleared') and route.get('target_stage'):return route['target_stage']
@@ -407,7 +444,7 @@ class StoryController:
         if stage['id'] in self.book['stages'] and not (self.goal and stage['id']==SAINT_STAGE):
             self.ticket=None;self.r.back('这关已通关，返回地图选下一关');return True,.7
         if self.goal and stage_order(stage['id'])>stage_order(SAINT_STAGE):return self.wait('不会推进超过圣女3-7','当前准备页已超过目标关；返回目标地图后继续。')
-        cost=entry_cost(f)
+        cost=entry_cost(f,allow_zero=self.walking.enabled)
         if cost is None:return self.wait('等待清晰入场体力读数','未能可靠读取本次消耗/剩余体力，不猜测。')
         required,available=cost
         if available<required:
@@ -418,6 +455,7 @@ class StoryController:
         if control['kind']!='single_task':return self.wait('队伍页入场方式等待确认','未核实当前队伍准备页的完整布局与唯一普通单次任务入口；不以AUTO或辅助英雄占位作为条件。')
         if control['kind']=='single_task':word=control['target']
         intent=dict(id=uuid.uuid4().hex,stage=stage['id'],name=stage['name'],region=stage['region'],cost=required,stamina_before=available,start_epoch=time.time(),team_entry_mode=control['kind'],proof='当前准备页精确关卡编号与体力；'+control['proof'],evidence=self.r.evidence('story-entry-'+stage['id']))
+        if stage.get('map_binding'):intent['map_binding']=copy.deepcopy(stage['map_binding'])
         dispatch=reserve_entry(self.book,intent['id'],intent);self.book['active']=intent
         self.r.save()  # Persist full per-run intent BEFORE the only entry click.
         self.entry_wait_until=time.monotonic()+15;self.ticket=None
@@ -441,6 +479,8 @@ class StoryController:
         self.r.save()
     def step(self,f,mode):
         page=map_info(f) if mode=='legacy_story_map' else None
+        if page and page.get('layout')=='walking_short':return self.walking.map_step(f,page)
+        if self.walking.enabled and mode in ('support','team'):return self.walking.prep_step(f,mode)
         stage=read_stage(f) if mode in ('support','team') else None
         if page:
             chapters={stage_order(r['id'])[0] for r in page['rows']}
@@ -477,8 +517,9 @@ class StoryController:
                 if current and current!=wanted_chapter:
                     neighbour=current+(1 if current<wanted_chapter else -1)
                     previous=next((route for route in reversed(self.book.get('region_transitions',[])) if stage_order(route['target_stage'])[0]==neighbour),None)
-                    name=previous['region'] if previous else self.book.get('chapter_regions',{}).get(str(neighbour)) or {1:SAINT_REGIONS[1],2:SAINT_REGIONS[2]}.get(neighbour)
-                    gate=region_exit(f,current,self.book.get('regions_seen',[]),target_name=name)
+                    saint_names=SAINT_REGIONS if self.goal or self.book_id==SAINT_BOOK else {}
+                    name=previous['region'] if previous else self.book.get('chapter_regions',{}).get(str(neighbour)) or saint_names.get(neighbour)
+                    gate=region_exit(f,current,self.book.get('regions_seen',[]),target_name=name) if name or wanted_chapter>current else None
                     if gate:
                         nav=self.book.setdefault('navigation',{});key=page['region']+'>'+desired;tries=nav.setdefault('region_tries',{}).get(key,0)
                         if tries>=2:return self.wait('目标地区导航未生效','未进入未知关卡或重复消耗体力。')

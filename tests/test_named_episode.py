@@ -339,6 +339,46 @@ class NativeStoryTeamTests(unittest.TestCase):
         self.assertEqual(f.words[-1]['verification_scores'],[.999])
         self.assertEqual(f.words[-1]['source'],'current_preparation_power_label_field_read')
 
+    def test_generic_objective_entry_glitter_gets_one_current_field_not_chapter_rules(self):
+        from tutorial_ocr import strengthen_preparation_entry_label
+        from story_core import team_entry_control
+        for label in ('←进行任务','进行任务+','进行任务'):
+            f=self.team();f.words[12].update(text=label,score=.876)
+            old=copy.deepcopy(f.words[12]);ocr=Mock(return_value=([['进行任务',.999]],None));at=f.at
+            strengthen_preparation_entry_label(f,ocr);strengthen_preparation_entry_label(f,ocr)
+            ocr.assert_called_once();self.assertEqual(f.at,at);self.assertEqual(f.words[12],old)
+            self.assertEqual(f.words[-1]['original_ocr'],old)
+            self.assertEqual(team_entry_control(f)['kind'],'single_task')
+            f.words.insert(12,copy.deepcopy(old))
+            self.assertEqual(team_entry_control(f)['kind'],'unknown')
+        f=self.team();f.words[12].update(text='←进行任务',score=.876);f.image[:]=22
+        ocr=Mock();strengthen_preparation_entry_label(f,ocr);ocr.assert_not_called()
+
+    def test_supplement_must_bind_this_frame_and_unchanged_original(self):
+        from tutorial_ocr import strengthen_preparation_entry_label,strengthen_preparation_power_label
+        from story_core import team_entry_control
+        for index,text,helper in ((9,'－队伍战斗力',strengthen_preparation_power_label),(12,'←进行任务',strengthen_preparation_entry_label)):
+            for change in ('stale','changed_source','changed_score'):
+                f=self.team();f.words[index].update(text=text,score=.882)
+                helper(f,Mock(return_value=([['队伍战斗力' if index==9 else '进行任务',.999]],None)))
+                self.assertEqual(team_entry_control(f)['kind'],'single_task')
+                if change=='stale':f.at+=1
+                elif change=='changed_source':f.words[index]['text']='其他正文'
+                else:f.words[-1]['verification_scores']=[.97]
+                self.assertEqual(team_entry_control(f)['kind'],'unknown')
+
+    def test_decorative_dash_and_weak_power_use_one_bound_field_not_duplicate_control(self):
+        from tutorial_ocr import strengthen_preparation_power_label
+        from story_core import team_entry_control
+        for prefix in ('－','—','−',''):
+            f=self.team();f.words[9].update(text=prefix+'队伍战斗力',score=.882)
+            original=copy.deepcopy(f.words[9]);ocr=Mock(return_value=([['队伍战斗力',.999]],None))
+            strengthen_preparation_power_label(f,ocr);strengthen_preparation_power_label(f,ocr)
+            ocr.assert_called_once();self.assertEqual(f.words[9],original)
+            self.assertEqual(team_entry_control(f)['kind'],'single_task')
+            f.words.insert(9,copy.deepcopy(original))
+            self.assertEqual(team_entry_control(f)['kind'],'unknown')
+
     def test_power_field_weak_changed_or_ambiguous_read_never_strengthens(self):
         from tutorial_ocr import strengthen_preparation_power_label
         for rows in ([['队伍战斗力',.979]],[['其他文字',.999]],[['队伍战斗力',.999],['队伍战斗力',.999]],[]):

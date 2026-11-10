@@ -66,7 +66,7 @@ SCENE_NAMES = {
     'settlement': '通关结算',
     'bond_notice': '缘分解锁提示',
     'legacy_story_regions': '旧版剧情地区总览',
-    'legacy_story_map': '旧版剧情地图',
+    'legacy_story_map': '行走地图（主线/旧剧情共用）',
     'legacy_story_clear': '旧版剧情胜利过场',
     'legacy_story_exit': '旧版剧情出口',
     'post_clear_exit': '通关后离开页面',

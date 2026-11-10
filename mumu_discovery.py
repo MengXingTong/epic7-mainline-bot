@@ -1,7 +1,7 @@
-"""Read-only MuMu instance discovery; connect only manager-reported loopback ADB.
+"""Read-only discovery of online local Android instances and their current app.
 
 No guessed port range, emulator launch, game launch, focus change or game input.
-An old selected serial is a preference, never a discovery filter.
+Manager metadata and saved packages never veto an already online instance.
 """
 from __future__ import annotations
 from collections import Counter
@@ -26,21 +26,28 @@ def find_manager(adb):
     return None
 
 
+def resumed_package(activity):
+    """Read the actual foreground component, independently of distribution names."""
+    packages=set()
+    for line in activity.splitlines():
+        if not re.match(r'\s*(?:topResumedActivity|mResumedActivity)\s*[:=]',line):continue
+        match=re.search(r'(?:^|\s|=)([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)/[A-Za-z0-9_.$]+',line)
+        if match:packages.add(match[1])
+    return next(iter(packages)) if len(packages)==1 else None
+
+
 def manager_instances(value):
     if not isinstance(value,dict):raise ValueError('MuMu管理器未返回实例对象。')
     eligible=[]
     for key,row in value.items():
         if not isinstance(row,dict) or not re.fullmatch(r'[0-9]+',str(key)):continue
-        if (str(row.get('index'))!=str(key) or row.get('is_process_started') is not True
-                or row.get('is_android_started') is not True or row.get('error_code')!=0
-                or type(row.get('pid')) is not int or row['pid']<=0
-                or type(row.get('adb_port')) is not int):continue
-        host=row.get('adb_host_ip')
-        serial=f'{host}:{row["adb_port"]}'
+        # Manager versions differ in status/PID fields. ADB proves reachability.
+        host=row.get('adb_host_ip','127.0.0.1')
+        serial=f'{host}:{row.get("adb_port", "")}'
         port=local_port(serial)
         if port is None:continue
         name=''.join(c for c in str(row.get('name','')) if c.isprintable()).strip()[:80]
-        eligible.append(dict(index=int(key),name=name,serial=f'127.0.0.1:{port}',port=port,pid=row['pid']))
+        eligible.append(dict(index=int(key),name=name,serial=f'127.0.0.1:{port}',port=port))
     counts=Counter(r['port'] for r in eligible)
     return sorted((r for r in eligible if counts[r['port']]==1),key=lambda r:r['index'])
 
@@ -77,6 +84,25 @@ def discover_mumu(adb,cfg,*,run=None,clock=None,manager=None,budget=16):
     except (OSError,subprocess.TimeoutExpired,TimeoutError):
         return [],[*warnings,'ADB设备列表暂不可用；未启动或操作模拟器。']
     online={local_port(s) for s in serials}
+    by_port={r['port']:r for r in instances or []}
+    targets=[];inspected=set()
+    def inspect(serials):
+        for serial in serials:
+            port=local_port(serial)
+            if port in inspected:continue
+            inspected.add(port);row=by_port.get(port)
+            try:result=command([adb,'-s',serial,'shell','dumpsys','activity','activities'],2)
+            except (OSError,subprocess.TimeoutExpired,TimeoutError):
+                warnings.append('模拟器当前应用暂未读到；请先打开游戏后刷新：'+serial);continue
+            package=resumed_package(result.stdout.decode('utf-8-sig',errors='replace')) if not result.returncode else None
+            if package is None:
+                warnings.append('模拟器当前应用暂未读到；请先打开游戏后刷新：'+serial);continue
+            label=('MuMu · 实例 '+str(row['index'])+(' · '+row['name'] if row['name'] else '') if row else 'MuMu')+' · '+serial+' · 当前应用 '+package+' · 后台调试连接'
+            target=dict(client='mumu',serial=serial,package=package,label=label)
+            if row:target['mumu_index']=row['index']
+            targets.append(target)
+    # Closed ports in other manager entries must not consume the online app's budget.
+    inspect(serials)
     # Without management information, preserve the old exact local fallback only.
     candidates=instances if instances is not None else []
     if instances is None and not serials:
@@ -85,6 +111,7 @@ def discover_mumu(adb,cfg,*,run=None,clock=None,manager=None,budget=16):
         if port is not None:candidates=[dict(serial=f'127.0.0.1:{port}',port=port)]
     connected=False
     for row in candidates:
+        if clock()>=deadline:break
         if row['port'] in online:continue
         try:
             result=command([adb,'connect',row['serial']],2)
@@ -97,21 +124,5 @@ def discover_mumu(adb,cfg,*,run=None,clock=None,manager=None,budget=16):
         except (OSError,subprocess.TimeoutExpired,TimeoutError):
             warnings.append('连接后未能重新核实ADB设备；不把连接发送当作连接成功。')
             serials=[]
-    by_port={r['port']:r for r in instances or []}
-    targets=[];package=cfg.get('package','com.stove.epic7.google')
-    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+',package):
-        raise ValueError('游戏Android包名无效；未发送包查询。')
-    for serial in serials:
-        port=local_port(serial)
-        if instances is not None and port not in by_port:continue
-        row=by_port.get(port)
-        try:result=command([adb,'-s',serial,'shell','pm','path',package],2)
-        except (OSError,subprocess.TimeoutExpired,TimeoutError):
-            warnings.append('模拟器游戏安装状态暂未核实：'+serial);continue
-        if result.returncode or not result.stdout.strip().startswith(b'package:'):
-            warnings.append('已启动的模拟器未核实到所选游戏包：'+serial);continue
-        label=('MuMu · 实例 '+str(row['index'])+(' · '+row['name'] if row['name'] else '') if row else 'MuMu')+' · '+serial+' · 后台调试连接'
-        target=dict(client='mumu',serial=serial,package=package,label=label)
-        if row:target['mumu_index']=row['index']
-        targets.append(target)
+        inspect(serials)
     return targets,warnings

@@ -46,8 +46,8 @@ class UnifiedTransport:
             if not self.api.ready(rows[0]):raise PcSafetyError('桌面端后台窗口不可用或已最小化，已停止操作。')
             return rows[0]
         activity=self.adb('shell','dumpsys','activity','activities').decode('utf-8',errors='replace')
-        lines=[l for l in activity.splitlines() if 'topResumedActivity' in l or 'mResumedActivity' in l]
-        if not any(self.target['package']+'/' in l for l in lines):raise RuntimeError('MuMu前台Android应用不是已绑定游戏，停止输入。')
+        from mumu_discovery import resumed_package
+        if resumed_package(activity)!=self.target['package']:raise RuntimeError('MuMu当前Android应用与所选应用不同；请切回所选游戏。未发送输入。')
         return self.target['serial']
 
     def input_tick(self):return None  # Both supported modes are background-only.

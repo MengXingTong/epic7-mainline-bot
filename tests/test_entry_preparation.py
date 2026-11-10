@@ -38,6 +38,17 @@ class EntryPreparationTests(unittest.TestCase):
         self.assertEqual(self.dispatch()['status'],'sent')
         self.assertEqual(json.loads(self.receipt().read_text(encoding='utf8'))['status'],'sent')
         self.assertEqual(len(self.r.s['entry_dispatches']['E4-C4-S3']),1)
+    def test_legacy_dispatch_without_preparation_id_is_observation_only(self):
+        from entry_preparation import continue_prepared_entry
+        for status in ('reserved','unknown','sent','not_sent'):
+            for fields in ({},{'id':None},{'id':''},{'id':0}):
+                with self.subTest(status=status,fields=fields):
+                    self.r.s.update(active={'key':'legacy'},attempted={'legacy':{'cost':8}},
+                                    entry_dispatches={'legacy':[dict(status=status,**fields)]})
+                    original=copy.deepcopy(self.r.s)
+                    self.assertIsNone(continue_prepared_entry(self.r,'map'))
+                    self.assertEqual(self.r.s,original);self.r.adb.assert_not_called()
+                    self.r.save.assert_not_called()
     def test_expensive_save_defers_expired_observation_without_extra_capture_or_send(self):
         clock=[time.time()]
         def save():self.timeline.append('save');clock[0]+=20
@@ -111,5 +122,64 @@ class EntryPreparationTests(unittest.TestCase):
         prep=self.r.s['entry_preparations'][self.dispatch()['id']];prep['phase']='prepared'
         with self.assertRaises(ValueError):dispatch_first_entry(self.r,self.dispatch(),'观看故事（仅一次）',resume=True)
         self.r.adb.assert_called_once()
+
+    def test_expiry_in_read_only_game_guard_does_not_consume_input(self):
+        clock=[time.time()]
+        self.r.frame.at=clock[0]
+        self.r.ensure_game.side_effect=lambda:clock.__setitem__(0,clock[0]+6)
+        with patch('time.time',side_effect=lambda:clock[0]):
+            with self.assertRaises(EntryPreparationDeferred):self.open()
+        self.r.adb.assert_not_called();self.assertFalse(self.receipt().exists())
+        self.assertEqual(self.r.s['entry_preparations'][self.dispatch()['id']]['phase'],'prepared')
+        self.assertEqual(self.dispatch()['status'],'reserved')
+        original=copy.deepcopy(self.r.s['attempted'])
+        self.r.ensure_game.side_effect=None;self.r.frame=frame()
+        self.assertTrue(self.r.step(self.r.frame)[0]);self.r.adb.assert_called_once()
+        self.assertEqual(self.r.s['attempted'],original);self.assertEqual(self.dispatch()['status'],'sent')
+
+    def test_expiry_in_actual_input_backend_stays_unknown(self):
+        from pc_backend import FrameExpired
+        self.r.adb.side_effect=FrameExpired('backend expired')
+        with self.assertRaises(FrameExpired):self.open()
+        self.assertEqual(self.r.s['entry_preparations'][self.dispatch()['id']]['phase'],'unknown')
+        self.assertEqual(json.loads(self.receipt().read_text(encoding='utf8'))['input_boundary'],'called')
+        self.r.adb.assert_called_once()
+        with self.assertRaises(ValueError):dispatch_first_entry(self.r,self.dispatch(),'观看故事（仅一次）',resume=True)
+
+    def test_expiry_during_tiny_receipt_write_retires_intent_and_next_cycle_uses_new_receipt(self):
+        clock=[time.time()];self.r.frame.at=clock[0];write=runner.atomic_json
+        def slow(path,value,**kw):
+            write(path,value,**kw)
+            if value.get('status')=='invoking':clock[0]+=6
+        with patch('time.time',side_effect=lambda:clock[0]),patch('runner.atomic_json',side_effect=slow):
+            with self.assertRaises(EntryPreparationDeferred):self.open()
+        old=self.receipt().read_bytes();self.r.adb.assert_not_called()
+        self.assertEqual(json.loads(old)['status'],'cancelled_before_backend')
+        prep=self.r.s['entry_preparations'][self.dispatch()['id']]
+        self.assertEqual(prep['phase'],'prepared');self.assertEqual(len(prep['guard_cancellations']),1)
+        self.r.frame=frame();self.r.step(self.r.frame);self.r.adb.assert_called_once()
+        self.assertEqual(self.receipt().read_bytes(),old)
+        new=self.receipt().with_name('entry-invocation-'+self.dispatch()['id']+'-1.json')
+        self.assertEqual(json.loads(new.read_text(encoding='utf8'))['status'],'sent')
+        self.assertEqual(len(self.r.s['entry_dispatches'][self.dispatch()['entry']['key']]),1)
+
+    def test_tampered_cancelled_receipt_does_not_release_another_input(self):
+        clock=[time.time()];self.r.frame.at=clock[0];write=runner.atomic_json
+        def slow(path,value,**kw):
+            write(path,value,**kw)
+            if value.get('status')=='invoking':clock[0]+=6
+        with patch('time.time',side_effect=lambda:clock[0]),patch('runner.atomic_json',side_effect=slow):
+            with self.assertRaises(EntryPreparationDeferred):self.open()
+        self.receipt().write_text('{}',encoding='utf8');self.r.frame=frame()
+        with self.assertRaises(ValueError):self.r.step(self.r.frame)
+        self.r.adb.assert_not_called()
+
+    def test_safety_change_and_critical_write_errors_still_raise(self):
+        from pc_backend import PcSafetyError
+        self.r.ensure_game.side_effect=PcSafetyError('geometry changed')
+        with self.assertRaises(PcSafetyError):self.open()
+        self.r.adb.assert_not_called();self.assertFalse(self.receipt().exists())
+        self.assertEqual(self.r.s['entry_preparations'][self.dispatch()['id']]['phase'],'prepared')
+
 
 if __name__=='__main__':unittest.main()
